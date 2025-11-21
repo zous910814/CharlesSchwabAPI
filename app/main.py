@@ -1,9 +1,7 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 
 from app.core.config import get_settings
-from app.routers import accounts, orders
-from app.routers import auth
-
+from app.routers import accounts, orders, auth, market_data
 
 settings = get_settings()
 
@@ -16,6 +14,7 @@ app = FastAPI(
 app.include_router(accounts.router)
 app.include_router(orders.router)
 app.include_router(auth.router)
+app.include_router(market_data.router)
 
 
 @app.get("/health", tags=["health"])

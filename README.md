@@ -26,7 +26,7 @@ pip install -r requirements.txt
 2) Copy `.env.example` to `.env` and fill in Schwab credentials and account details.
 3) Start the server:
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --ssl-certfile cert.pem --ssl-keyfile key.pem --reload
 # or uvicorn main:app --reload
 ```
 

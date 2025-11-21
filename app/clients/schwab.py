@@ -85,3 +85,20 @@ class SchwabClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def get_price_history(self, symbol: str, **query: object) -> dict:
+        """Fetch historical OHLCV candles for a symbol."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"symbol": symbol}
+        params.update({k: v for k, v in query.items() if v is not None})
+        # Avoid double-versioning if base_url already ends with /v1
+        api_root = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{api_root}/marketdata/v1/pricehistory",
+                headers=headers,
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json()

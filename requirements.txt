@@ -1,6 +1,7 @@
-﻿fastapi
+fastapi
 uvicorn[standard]
 httpx
 python-dotenv
 pydantic
 pydantic-settings
+pytest

@@ -14,7 +14,6 @@ def get_client(settings: Settings = Depends(get_settings)) -> SchwabClient:
         client_secret=settings.schwab_client_secret,
         redirect_uri=settings.schwab_redirect_uri,
         refresh_token=settings.schwab_refresh_token,
-        code_verifier=settings.schwab_code_verifier,
         base_url=settings.schwab_base_url,
     )
 

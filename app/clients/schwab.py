@@ -12,14 +12,12 @@ class SchwabClient:
         client_secret: str,
         redirect_uri: str,
         refresh_token: str,
-        code_verifier: Optional[str] = None,
         base_url: str,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
         self.refresh_token = refresh_token
-        self.code_verifier = code_verifier
         self.base_url = base_url.rstrip("/")
 
         self.access_token: Optional[str] = None
@@ -53,8 +51,6 @@ class SchwabClient:
             "code": code,
             "redirect_uri": self.redirect_uri,
         }
-        if self.code_verifier:
-            data["code_verifier"] = self.code_verifier
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.base_url}/oauth/token",

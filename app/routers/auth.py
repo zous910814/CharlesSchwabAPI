@@ -16,7 +16,6 @@ def get_client(settings: Settings = Depends(get_settings)) -> SchwabClient:
         client_id=settings.schwab_client_id,
         client_secret=settings.schwab_client_secret,
         redirect_uri=settings.schwab_redirect_uri,
-        code_verifier=settings.schwab_code_verifier,
         refresh_token=settings.schwab_refresh_token,
         base_url=settings.schwab_base_url,
     )
@@ -57,13 +56,12 @@ async def oauth_callback(
                     if not replaced:
                         new_lines.append(f"SCHWAB_REFRESH_TOKEN={refresh_token}")
                     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                    print("✅ .env 已自動更新 SCHWAB_REFRESH_TOKEN")
+                    print(".env 已自動更新 SCHWAB_REFRESH_TOKEN")
         except Exception as env_exc:  # pragma: no cover - best-effort persistence
-            print("⚠️ 更新 .env 失敗：", env_exc)
+            print("更新 .env 失敗：", env_exc)
 
         return {"state": state, "tokens": tokens, "saved": saved, "save_error": save_error}
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=str(exc))
-

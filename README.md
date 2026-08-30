@@ -1,21 +1,18 @@
-﻿# Schwab FastAPI Skeleton
+# Schwab FastAPI Skeleton
 
-A small FastAPI service that wraps Charles Schwab API calls (balances + orders) with config isolation and schema validation.
+A minimal FastAPI service that handles Charles Schwab OAuth: log in, get an auth code, exchange it for tokens.
 
 ## Project layout
 ```
 app/
   main.py              # FastAPI app with routers registered
   core/config.py       # Settings loaded from env/.env via pydantic
-  clients/schwab.py    # Schwab API client with token refresh + HTTP calls
-  routers/accounts.py  # Accounts routes (balances)
-  routers/orders.py    # Orders routes (place order)
-  routers/auth.py      # OAuth callback to convert auth code -> tokens
-  schemas/order.py     # Pydantic order payload models
-main.py                # Re-exports app for `uvicorn main:app`
-schwab_client.py       # Re-exports SchwabClient for convenience
+  clients/schwab.py     # Schwab API client: token refresh + code exchange
+  routers/accounts.py   # GET /accounts/login — starts the OAuth flow
+  routers/auth.py       # GET /accounts/callback — exchanges code for tokens
 requirements.txt
-.env.example
+.env
+cert.pem / key.pem      # local TLS certs for the HTTPS redirect URI
 ```
 
 ## Setup
@@ -23,36 +20,17 @@ requirements.txt
 ```bash
 pip install -r requirements.txt
 ```
-2) Copy `.env.example` to `.env` and fill in Schwab credentials and account details.
+2) Fill in Schwab credentials and account details in `.env`.
 3) Start the server:
 ```bash
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --ssl-certfile cert.pem --ssl-keyfile key.pem --reload
-# or uvicorn main:app --reload
 ```
 
 ## API
 - `GET /health` — basic health check with configured default account id
-- `GET /accounts/{account_id}/balances` — fetch balances for a specific account
-- `GET /accounts/default/balances` — fetch balances using the configured default account
-- `POST /orders/{account_id}` — place an order for a specific account
-- `POST /orders/default` — place an order for the configured default account
-- `GET /accounts/callback?code=...&state=...` — OAuth redirect target; exchanges `code` for access/refresh tokens
-
-`OrderRequest` payload (example):
-```json
-{
-  "orderType": "MARKET",
-  "session": "NORMAL",
-  "duration": "DAY",
-  "orderStrategyType": "SINGLE",
-  "orderLegCollection": [
-    {"instruction": "BUY", "quantity": 10, "symbol": "AAPL", "assetType": "EQUITY"}
-  ]
-}
-```
+- `GET /accounts/login` — returns/renders the Schwab authorize URL to start login
+- `GET /accounts/callback?code=...&state=...` — OAuth redirect target; exchanges `code` for access/refresh tokens, persists them to `.schwab_tokens.json`, and updates `SCHWAB_REFRESH_TOKEN` in `.env`
 
 ## Notes
 - `SCHWAB_BASE_URL` defaults to `https://api.schwabapi.com`; swap to the sandbox base if provided by Schwab.
-- Initial OAuth authorization to obtain the first refresh token must be handled separately; store the refresh token securely.
-- Add logging, retries, and stricter order models as you refine supported order types.
 - If your Schwab app lists a callback like `https://127.0.0.1:8000/accounts/callback`, run the FastAPI server on that host/port and use the same URL in Schwab app settings. If you're not terminating TLS locally, set the callback to `http://127.0.0.1:8000/accounts/callback` to match the protocol you actually use.

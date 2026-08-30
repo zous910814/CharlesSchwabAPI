@@ -1,22 +1,11 @@
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
 
-from app.clients.schwab import SchwabClient
 from app.core.config import get_settings, Settings
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
-
-
-def get_client(settings: Settings = Depends(get_settings)) -> SchwabClient:
-    return SchwabClient(
-        client_id=settings.schwab_client_id,
-        client_secret=settings.schwab_client_secret,
-        redirect_uri=settings.schwab_redirect_uri,
-        refresh_token=settings.schwab_refresh_token,
-        base_url=settings.schwab_base_url,
-    )
 
 
 @router.get("/login")

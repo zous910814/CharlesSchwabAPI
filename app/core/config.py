@@ -1,7 +1,7 @@
-﻿from functools import lru_cache
+from functools import lru_cache
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     schwab_refresh_token: str = Field(..., env="SCHWAB_REFRESH_TOKEN")
     schwab_account_id: str = Field(..., env="SCHWAB_ACCOUNT_ID")
     schwab_base_url: str = Field("https://api.schwabapi.com", env="SCHWAB_BASE_URL")
+    schwab_dry_run: bool = Field(True, env="SCHWAB_DRY_RUN")
 
     class Config:
         case_sensitive = False

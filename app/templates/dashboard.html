@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Schwab Trading Activity</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #e2e2e6;
+    --text: #1b1b1f;
+    --muted: #6b6b74;
+    --accent: #3457d5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c;
+      --panel: #212227;
+      --border: #34353b;
+      --text: #ececef;
+      --muted: #9a9aa2;
+      --accent: #6f8bff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 14px; padding: 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .toolbar input, .toolbar select {
+    padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 13px;
+  }
+  .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #999; margin-left: auto; }
+  .status-dot.live { background: #2ecc71; box-shadow: 0 0 0 3px rgba(46,204,113,.2); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  thead th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border);
+  }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(127,127,127,.06); }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  }
+  .badge.success { background: #e3f9ec; color: #1a7f4b; }
+  .badge.failed, .badge.error { background: #fdeaea; color: #b3261e; }
+  .badge.dry_run { background: #eef1fd; color: var(--accent); }
+  .badge.sent { background: #fff4e0; color: #a15c00; }
+  .badge.skipped { background: #f1f1f4; color: #58585f; }
+  .badge.BUY { background: #e3f9ec; color: #1a7f4b; }
+  .badge.SELL { background: #fdeaea; color: #b3261e; }
+  .badge.HOLD { background: #f1f1f4; color: #58585f; }
+  @media (prefers-color-scheme: dark) {
+    .badge.success { background: #113322; color: #57d992; }
+    .badge.failed, .badge.error { background: #3a1616; color: #ff8a80; }
+    .badge.dry_run { background: #232852; color: #9db1ff; }
+    .badge.sent { background: #3a2c0f; color: #ffc670; }
+    .badge.skipped { background: #2c2c31; color: #b5b5bd; }
+    .badge.BUY { background: #113322; color: #57d992; }
+    .badge.SELL { background: #3a1616; color: #ff8a80; }
+    .badge.HOLD { background: #2c2c31; color: #b5b5bd; }
+  }
+  .panel-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+  .market-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .market-badge.open { background: #e3f9ec; color: #1a7f4b; }
+  .market-badge.closed { background: #f1f1f4; color: #58585f; }
+  .market-badge.tripped { background: #fdeaea; color: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    .market-badge.open { background: #113322; color: #57d992; }
+    .market-badge.closed { background: #2c2c31; color: #b5b5bd; }
+    .market-badge.tripped { background: #3a1616; color: #ff8a80; }
+  }
+  .btn {
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .btn:hover { background: rgba(127,127,127,.1); }
+  .btn.paused { background: #fdeaea; color: #b3261e; border-color: transparent; }
+  @media (prefers-color-scheme: dark) {
+    .btn.paused { background: #3a1616; color: #ff8a80; }
+  }
+  .monitor-meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .grid-2col { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (min-width: 760px) { .grid-2col { grid-template-columns: 1fr 1fr; align-items: start; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .panel table { border: none; border-radius: 0; }
+  .panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .panel-head .cash { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; line-height: 1.6; }
+  .panel-head .cash strong { color: var(--text); font-variant-numeric: tabular-nums; }
+  .pl-pos { color: #1a7f4b; font-weight: 600; }
+  .pl-neg { color: #b3261e; font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .pl-pos { color: #57d992; }
+    .pl-neg { color: #ff8a80; }
+  }
+  code.symbol { font-weight: 600; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+  pre {
+    margin: 6px 0 0; padding: 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 11px; max-width: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+  .ts { white-space: nowrap; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Schwab Trading Activity</h1>
+  <p class="sub">Portfolio, live K/D signal monitor, and every order attempt/result. Auto-refreshes every 5s.</p>
+
+  <div class="grid-2col">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" style="margin:0">Portfolio</span>
+        <span class="cash">
+          Buying power: <strong id="portfolio-cash">—</strong><br>
+          Account value: <strong id="portfolio-equity">—</strong>
+        </span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Qty</th>
+            <th>Avg Cost</th>
+            <th>Current</th>
+            <th>Value</th>
+            <th>P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-rows"></tbody>
+      </table>
+      <div id="portfolio-empty" class="empty" hidden>No open positions.</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" style="margin:0">
+          Live Monitor
+          <span class="market-badge closed" id="market-badge">checking…</span>
+          <span class="market-badge tripped" id="breaker-badge" hidden>circuit breaker tripped</span>
+        </span>
+        <button id="pause-btn" class="btn" type="button">Pause</button>
+      </div>
+      <span class="monitor-meta" id="monitor-meta" style="display:block;margin-bottom:8px">—</span>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Close</th>
+            <th>%K</th>
+            <th>%D</th>
+            <th>Signal</th>
+          </tr>
+        </thead>
+        <tbody id="monitor-rows"></tbody>
+      </table>
+      <div id="monitor-empty" class="empty" hidden>No symbols evaluated yet — check watchlist.json and market hours.</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <input id="f-symbol" placeholder="Symbol (e.g. AAPL)" size="12" />
+    <select id="f-status">
+      <option value="">All statuses</option>
+      <option value="success">success</option>
+      <option value="failed">failed</option>
+      <option value="error">error</option>
+      <option value="dry_run">dry_run</option>
+      <option value="sent">sent</option>
+      <option value="skipped">skipped</option>
+      <option value="BUY">BUY</option>
+      <option value="SELL">SELL</option>
+      <option value="HOLD">HOLD</option>
+    </select>
+    <select id="f-event">
+      <option value="">All events</option>
+      <option value="order_submitted">order_submitted</option>
+      <option value="order_result">order_result</option>
+      <option value="signal_check">signal_check</option>
+      <option value="order_skipped">order_skipped</option>
+      <option value="monitor_error">monitor_error</option>
+    </select>
+    <label><input type="checkbox" id="f-auto" checked /> Auto-refresh</label>
+    <span class="status-dot" id="live-dot"></span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Event</th>
+        <th>Symbol</th>
+        <th>Account</th>
+        <th>Status</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty" hidden>No activity yet — orders placed through the API will show up here.</div>
+</div>
+
+<script>
+  const rowsEl = document.getElementById('rows');
+  const emptyEl = document.getElementById('empty');
+  const dot = document.getElementById('live-dot');
+  const fSymbol = document.getElementById('f-symbol');
+  const fStatus = document.getElementById('f-status');
+  const fEvent = document.getElementById('f-event');
+  const fAuto = document.getElementById('f-auto');
+  let timer = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function renderRow(ev) {
+    const detail = ev.detail ? `<details><summary>view</summary><pre>${esc(JSON.stringify(ev.detail, null, 2))}</pre></details>` : '';
+    const error = ev.error ? `<pre>${esc(ev.error)}</pre>` : '';
+    const status = ev.status || '-';
+    return `<tr>
+      <td class="ts">${esc(ev.ts)}</td>
+      <td>${esc(ev.event_type)}</td>
+      <td><code class="symbol">${esc(ev.symbol || '-')}</code></td>
+      <td>${esc(ev.account_id || '-')}</td>
+      <td><span class="badge ${esc(status)}">${esc(status)}</span></td>
+      <td>${detail}${error}</td>
+    </tr>`;
+  }
+
+  async function load() {
+    const params = new URLSearchParams({ limit: '200' });
+    if (fSymbol.value.trim()) params.set('symbol', fSymbol.value.trim().toUpperCase());
+    if (fStatus.value) params.set('status', fStatus.value);
+    if (fEvent.value) params.set('event_type', fEvent.value);
+
+    try {
+      const res = await fetch(`/api/activity?${params.toString()}`);
+      if (!res.ok) throw new Error(res.status);
+      const events = await res.json();
+      dot.classList.add('live');
+      if (!events.length) {
+        rowsEl.innerHTML = '';
+        emptyEl.hidden = false;
+        return;
+      }
+      emptyEl.hidden = true;
+      rowsEl.innerHTML = events.map(renderRow).join('');
+    } catch (e) {
+      dot.classList.remove('live');
+    }
+  }
+
+  const marketBadge = document.getElementById('market-badge');
+  const breakerBadge = document.getElementById('breaker-badge');
+  const pauseBtn = document.getElementById('pause-btn');
+  const monitorMeta = document.getElementById('monitor-meta');
+  const monitorRows = document.getElementById('monitor-rows');
+  const monitorEmpty = document.getElementById('monitor-empty');
+  let manualPause = false;
+
+  pauseBtn.addEventListener('click', async () => {
+    pauseBtn.disabled = true;
+    try {
+      const res = await fetch(manualPause ? '/api/monitor/resume' : '/api/monitor/pause', { method: 'POST' });
+      if (res.ok) await loadMonitor();
+    } finally {
+      pauseBtn.disabled = false;
+    }
+  });
+
+  function renderMonitorRow(symbol, s) {
+    const num = v => (typeof v === 'number') ? v.toFixed(2) : '-';
+    const signal = s.signal || 'HOLD';
+    return `<tr>
+      <td><code class="symbol">${esc(symbol)}</code></td>
+      <td class="mono">${num(s.close)}</td>
+      <td class="mono">${num(s.k)}</td>
+      <td class="mono">${num(s.d)}</td>
+      <td><span class="badge ${esc(signal)}">${esc(signal)}</span></td>
+    </tr>`;
+  }
+
+  async function loadMonitor() {
+    try {
+      const res = await fetch('/api/monitor/status');
+      if (!res.ok) throw new Error(res.status);
+      const state = await res.json();
+
+      marketBadge.textContent = state.market_open ? 'Market open' : 'Market closed';
+      marketBadge.className = `market-badge ${state.market_open ? 'open' : 'closed'}`;
+
+      const breaker = state.circuit_breaker || {};
+      breakerBadge.hidden = !breaker.tripped;
+
+      manualPause = !!state.manual_pause;
+      pauseBtn.textContent = manualPause ? 'Resume' : 'Pause';
+      pauseBtn.className = `btn ${manualPause ? 'paused' : ''}`;
+
+      const dayPl = (typeof breaker.day_pl === 'number') ? ` | today's P&L: ${fmtMoney(breaker.day_pl)}` : '';
+      monitorMeta.textContent = state.last_poll
+        ? `last poll: ${state.last_poll}${dayPl}${state.last_error ? ' — error: ' + state.last_error : ''}`
+        : 'not polled yet';
+
+      const symbols = Object.entries(state.symbols || {});
+      if (!symbols.length) {
+        monitorRows.innerHTML = '';
+        monitorEmpty.hidden = false;
+        return;
+      }
+      monitorEmpty.hidden = true;
+      monitorRows.innerHTML = symbols.map(([sym, s]) => renderMonitorRow(sym, s)).join('');
+    } catch (e) {
+      monitorMeta.textContent = 'monitor status unavailable';
+    }
+  }
+
+  const cashEl = document.getElementById('portfolio-cash');
+  const equityEl = document.getElementById('portfolio-equity');
+  const portfolioRows = document.getElementById('portfolio-rows');
+  const portfolioEmpty = document.getElementById('portfolio-empty');
+
+  function fmtMoney(v) {
+    return (typeof v === 'number') ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '-';
+  }
+
+  function renderPortfolioRow(p) {
+    const plClass = (typeof p.unrealized_pl === 'number') ? (p.unrealized_pl >= 0 ? 'pl-pos' : 'pl-neg') : '';
+    const plText = (typeof p.unrealized_pl === 'number')
+      ? `${fmtMoney(p.unrealized_pl)} (${(p.unrealized_pl_pct * 100).toFixed(1)}%)`
+      : '-';
+    return `<tr>
+      <td><code class="symbol">${esc(p.symbol)}</code></td>
+      <td class="mono">${p.quantity}</td>
+      <td class="mono">${fmtMoney(p.average_price)}</td>
+      <td class="mono">${fmtMoney(p.current_price)}</td>
+      <td class="mono">${fmtMoney(p.market_value)}</td>
+      <td class="mono ${plClass}">${plText}</td>
+    </tr>`;
+  }
+
+  async function loadPortfolio() {
+    try {
+      const res = await fetch('/api/portfolio');
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+
+      cashEl.textContent = fmtMoney(data.buying_power);
+      equityEl.textContent = fmtMoney(data.account_value);
+
+      const positions = data.positions || [];
+      if (!positions.length) {
+        portfolioRows.innerHTML = '';
+        portfolioEmpty.hidden = false;
+        return;
+      }
+      portfolioEmpty.hidden = true;
+      portfolioRows.innerHTML = positions.map(renderPortfolioRow).join('');
+    } catch (e) {
+      cashEl.textContent = 'unavailable';
+      equityEl.textContent = 'unavailable';
+    }
+  }
+
+  function scheduleAutoRefresh() {
+    if (timer) clearInterval(timer);
+    if (fAuto.checked) timer = setInterval(() => { load(); loadMonitor(); loadPortfolio(); }, 5000);
+  }
+
+  [fSymbol, fStatus, fEvent].forEach(el => el.addEventListener('change', load));
+  fSymbol.addEventListener('keyup', e => { if (e.key === 'Enter') load(); });
+  fAuto.addEventListener('change', scheduleAutoRefresh);
+
+  load();
+  loadMonitor();
+  loadPortfolio();
+  scheduleAutoRefresh();
+</script>
+</body>
+</html>

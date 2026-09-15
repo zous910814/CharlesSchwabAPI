@@ -24,6 +24,7 @@ ENV/
 
 # Logs
 *.log
+activity_log.db
 
 # Scripts directory
 scripts/

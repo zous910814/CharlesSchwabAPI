@@ -106,3 +106,61 @@ class SchwabClient:
         tokens = response.json()
         # Caller is responsible for persisting refresh_token securely
         return tokens
+
+    def _api_root(self) -> str:
+        # base_url is configured with a trailing /v1 for the oauth/token calls;
+        # trading and market-data endpoints hang off the bare host with their
+        # own /trader/v1 or /marketdata/v1 prefix, so strip it here.
+        return self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
+
+    async def _orders_request(self, path: str, account_id: str, order_body: dict) -> dict:
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        await self._throttle()
+        response = await self._get_http().post(
+            f"{self._api_root()}/trader/v1/accounts/{account_id}/{path}",
+            headers=headers,
+            json=order_body,
+        )
+        response.raise_for_status()
+        # Schwab's order endpoint returns 201 with no body; fall back to headers.
+        if not response.content:
+            return {"status_code": response.status_code, "location": response.headers.get("location")}
+        return response.json()
+
+    async def place_order(self, account_id: str, order_body: dict) -> dict:
+        return await self._orders_request("orders", account_id, order_body)
+
+    async def preview_order(self, account_id: str, order_body: dict) -> dict:
+        """Validate an order (commission/cost estimate, margin/balance checks)
+        without executing it — Schwab's previewOrder endpoint."""
+        return await self._orders_request("previewOrder", account_id, order_body)
+
+    async def get_account(self, account_id: str, fields: Optional[str] = "positions") -> dict:
+        """Account details: securitiesAccount.currentBalances (buying power) and,
+        with fields=positions, securitiesAccount.positions (current holdings)."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"fields": fields} if fields else None
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/trader/v1/accounts/{account_id}",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_price_history(self, symbol: str, **query: object) -> dict:
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"symbol": symbol}
+        params.update({k: v for k, v in query.items() if v is not None})
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/marketdata/v1/pricehistory",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()

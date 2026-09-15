@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Circuit breaker: pause new BUY/SELL trades (stop-loss still runs) once
     # today's floating P&L drops below this fraction of account value.
     schwab_daily_loss_limit_pct: float = Field(0.03, env="SCHWAB_DAILY_LOSS_LIMIT_PCT")
+    # Risk cap: max total notional value of BUY orders submitted today, as a
+    # fraction of account value. Tracked by the monitor itself (not read back
+    # from Schwab) so it still holds even if the account's reported buying
+    # power hasn't yet caught up with an order submitted moments earlier.
+    schwab_max_daily_order_value_pct: float = Field(0.20, env="SCHWAB_MAX_DAILY_ORDER_VALUE_PCT")
 
     class Config:
         case_sensitive = False

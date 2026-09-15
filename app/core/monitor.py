@@ -43,11 +43,73 @@ STATE: dict = {
     "symbols": {},  # symbol -> {close, k, d, signal, checked_at, last_acted_signal, stop_loss_triggered_on}
     "manual_pause": False,
     "circuit_breaker": {"tripped": False, "reason": None, "tripped_on": None, "day_pl": None, "account_value": None},
+    # Our own tracking of BUY orders submitted today whose effect on buying
+    # power we can't yet confirm from Schwab's numbers — see
+    # _daily_order_value_remaining / _reserve_daily_order_value.
+    "daily_order_value": {
+        "date": None,
+        "pending": [],  # FIFO list of unconfirmed BUY amounts submitted today
+        "pending_total": 0.0,
+        "last_seen_buying_power": None,
+        "cap": None,
+    },
 }
 
 
 def _today_str() -> str:
     return datetime.now(MARKET_TZ).date().isoformat()
+
+
+def _reset_daily_order_value_if_new_day(tracker: dict) -> None:
+    today = _today_str()
+    if tracker.get("date") != today:
+        tracker["date"] = today
+        tracker["pending"] = []
+        tracker["last_seen_buying_power"] = None
+
+
+def _daily_order_value_remaining(settings: Settings, buying_power: float, account_value: float) -> float:
+    """Remaining BUY budget for today: never more than the account's actual
+    buying power, minus BUY orders submitted today whose effect on that
+    buying power we can't yet confirm.
+
+    Each check reconciles first: if buying power has dropped since the last
+    check, that drop is assumed to be Schwab catching up with our own pending
+    reservations (oldest first) and those are cleared, so they stop being
+    double-subtracted once real numbers reflect them — a SELL raising buying
+    power flows straight into more remaining budget, and completed BUYs don't
+    get counted against you forever. SCHWAB_MAX_DAILY_ORDER_VALUE_PCT can pull
+    the ceiling in tighter than real buying power (e.g. cap the day at 20% of
+    account value even with more cash available); it can never loosen it past
+    the real balance. Resets when the calendar date rolls over.
+    """
+    tracker = STATE["daily_order_value"]
+    _reset_daily_order_value_if_new_day(tracker)
+
+    pending = tracker["pending"]
+    prev_bp = tracker["last_seen_buying_power"]
+    if prev_bp is not None and pending:
+        drop = prev_bp - buying_power
+        while pending and drop >= pending[0] - 1e-6:
+            drop -= pending.pop(0)
+    tracker["last_seen_buying_power"] = buying_power
+
+    pending_total = sum(pending)
+    tracker["pending_total"] = pending_total
+
+    cap = min(buying_power, account_value * settings.schwab_max_daily_order_value_pct)
+    tracker["cap"] = cap
+    return cap - pending_total
+
+
+def _reserve_daily_order_value(amount: float) -> None:
+    """Record a just-submitted BUY order's notional as an unconfirmed
+    reservation — cleared later by _daily_order_value_remaining once buying
+    power is observed to have actually dropped to reflect it."""
+    tracker = STATE["daily_order_value"]
+    _reset_daily_order_value_if_new_day(tracker)
+    tracker["pending"].append(amount)
+    tracker["pending_total"] = sum(tracker["pending"])
 
 
 def _trading_allowed(action: str) -> tuple[bool, Optional[str]]:
@@ -283,8 +345,30 @@ async def _maybe_trade(client: SchwabClient, settings: Settings, account_id: str
             return
         quantity = min(quantity, math.floor(headroom / close))
 
+        # Daily order-value cap: independent of Schwab's reported buying power
+        # (which can lag a moment behind an order just submitted), stop BUYing
+        # once our own tally of today's submitted BUY notional hits the cap.
+        remaining_daily_budget = _daily_order_value_remaining(settings, buying_power, account_value)
+        if remaining_daily_budget < close:
+            await activity_log.log_event(
+                event_type="order_skipped",
+                account_id=account_id,
+                symbol=symbol,
+                status="skipped",
+                detail={
+                    "reason": "daily_order_value_cap_reached",
+                    "remaining_daily_budget": remaining_daily_budget,
+                    "cap": STATE["daily_order_value"]["cap"],
+                    "max_daily_order_value_pct": settings.schwab_max_daily_order_value_pct,
+                },
+            )
+            return
+        quantity = min(quantity, math.floor(remaining_daily_budget / close))
+
         order_body = _market_order(symbol, "BUY", quantity)
+        order_notional = quantity * close
     else:  # SELL
+        order_notional = None
         held_qty = extract_position_qty(account, symbol)
         if held_qty <= 0:
             await activity_log.log_event(
@@ -306,6 +390,8 @@ async def _maybe_trade(client: SchwabClient, settings: Settings, account_id: str
             source="monitor",
         )
         symbol_state["last_acted_signal"] = signal
+        if order_notional is not None:
+            _reserve_daily_order_value(order_notional)
     except Exception:  # noqa: BLE001
         pass  # already logged inside submit_order
 

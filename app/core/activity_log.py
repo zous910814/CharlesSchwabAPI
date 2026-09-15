@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS activity_log (
 
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
+        # WAL lets the monitor loop's frequent writes and the dashboard's
+        # polling reads proceed concurrently instead of blocking each other;
+        # it's a database-level setting, persisted in the file, so this only
+        # needs to run once. busy_timeout (set per-connection below) covers
+        # the remaining brief contention instead of failing immediately.
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.execute(CREATE_TABLE_SQL)
         await db.commit()
 
@@ -42,6 +48,7 @@ async def log_event(
     ts = datetime.now(timezone.utc).isoformat()
     detail_json = json.dumps(detail, default=str) if detail is not None else None
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 5000")
         await db.execute(
             "INSERT INTO activity_log (ts, event_type, account_id, symbol, status, detail, error) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -75,6 +82,7 @@ async def fetch_events(
     params.append(limit)
 
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 5000")
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(query, params)
         rows = await cursor.fetchall()

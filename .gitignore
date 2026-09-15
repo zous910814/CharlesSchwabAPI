@@ -25,6 +25,11 @@ ENV/
 # Logs
 *.log
 activity_log.db
+activity_log.db-wal
+activity_log.db-shm
 
 # Scripts directory
 scripts/
+
+# Local launcher
+start.bat

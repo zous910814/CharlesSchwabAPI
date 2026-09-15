@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -21,38 +21,33 @@ from app.core.account import (
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
 from app.core.order_executor import submit_order
-from app.strategy.kd import compute_kd, kd_signal
+from app.core.quotes import extract_bid_ask, is_halted
+from app.strategy import orb
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 MARKET_TZ = ZoneInfo("America/New_York")
-K_PERIOD = 14
-D_PERIOD = 5
-OVERSOLD = 20.0
-OVERBOUGHT = 80.0
-MIN_CANDLES = K_PERIOD + D_PERIOD
+RVOL_BASELINE_DAYS = 20
 
 # In-memory snapshot the dashboard reads via GET /api/monitor/status. Resets
 # whenever the process restarts (e.g. --reload picks up a file change), which
-# also clears per-symbol "already acted on this signal" dedup state, the
-# manual pause, and the circuit breaker trip.
+# also clears per-symbol day-state (OR/position/entries-today), the manual
+# pause, and the circuit breaker trip.
 STATE: dict = {
     "running": False,
     "market_open": False,
     "last_poll": None,
     "last_error": None,
-    "symbols": {},  # symbol -> {close, k, d, signal, checked_at, last_acted_signal, stop_loss_triggered_on}
+    "symbols": {},
     "manual_pause": False,
     "circuit_breaker": {"tripped": False, "reason": None, "tripped_on": None, "day_pl": None, "account_value": None},
-    # Our own tracking of BUY orders submitted today whose effect on buying
-    # power we can't yet confirm from Schwab's numbers — see
-    # _daily_order_value_remaining / _reserve_daily_order_value.
     "daily_order_value": {
         "date": None,
-        "pending": [],  # FIFO list of unconfirmed BUY amounts submitted today
+        "pending": [],
         "pending_total": 0.0,
         "last_seen_buying_power": None,
         "cap": None,
     },
+    "orb_day": {"date": None, "consecutive_losses": 0},
 }
 
 
@@ -60,62 +55,13 @@ def _today_str() -> str:
     return datetime.now(MARKET_TZ).date().isoformat()
 
 
-def _reset_daily_order_value_if_new_day(tracker: dict) -> None:
-    today = _today_str()
-    if tracker.get("date") != today:
-        tracker["date"] = today
-        tracker["pending"] = []
-        tracker["last_seen_buying_power"] = None
-
-
-def _daily_order_value_remaining(settings: Settings, buying_power: float, account_value: float) -> float:
-    """Remaining BUY budget for today: never more than the account's actual
-    buying power, minus BUY orders submitted today whose effect on that
-    buying power we can't yet confirm.
-
-    Each check reconciles first: if buying power has dropped since the last
-    check, that drop is assumed to be Schwab catching up with our own pending
-    reservations (oldest first) and those are cleared, so they stop being
-    double-subtracted once real numbers reflect them — a SELL raising buying
-    power flows straight into more remaining budget, and completed BUYs don't
-    get counted against you forever. SCHWAB_MAX_DAILY_ORDER_VALUE_PCT can pull
-    the ceiling in tighter than real buying power (e.g. cap the day at 20% of
-    account value even with more cash available); it can never loosen it past
-    the real balance. Resets when the calendar date rolls over.
-    """
-    tracker = STATE["daily_order_value"]
-    _reset_daily_order_value_if_new_day(tracker)
-
-    pending = tracker["pending"]
-    prev_bp = tracker["last_seen_buying_power"]
-    if prev_bp is not None and pending:
-        drop = prev_bp - buying_power
-        while pending and drop >= pending[0] - 1e-6:
-            drop -= pending.pop(0)
-    tracker["last_seen_buying_power"] = buying_power
-
-    pending_total = sum(pending)
-    tracker["pending_total"] = pending_total
-
-    cap = min(buying_power, account_value * settings.schwab_max_daily_order_value_pct)
-    tracker["cap"] = cap
-    return cap - pending_total
-
-
-def _reserve_daily_order_value(amount: float) -> None:
-    """Record a just-submitted BUY order's notional as an unconfirmed
-    reservation — cleared later by _daily_order_value_remaining once buying
-    power is observed to have actually dropped to reflect it."""
-    tracker = STATE["daily_order_value"]
-    _reset_daily_order_value_if_new_day(tracker)
-    tracker["pending"].append(amount)
-    tracker["pending_total"] = sum(tracker["pending"])
-
-
 def _trading_allowed(action: str) -> tuple[bool, Optional[str]]:
-    """action: 'buy' | 'sell' | 'stop_loss'. Manual pause blocks everything;
-    the circuit breaker only blocks new speculative BUY/SELL, not stop-loss
-    exits (those should still be able to cut losses)."""
+    """action: 'buy' | 'sell' | 'stop_loss' | 'eod_flatten'. Manual pause blocks
+    everything except EOD flatten (never leave a position open overnight just
+    because the bot was paused); the circuit breaker only blocks new
+    speculative BUY/SELL, not protective stop-loss/flatten exits."""
+    if action == "eod_flatten":
+        return True, None
     if STATE.get("manual_pause"):
         return False, "manual_pause"
     if action in ("buy", "sell") and STATE["circuit_breaker"].get("tripped"):
@@ -162,22 +108,21 @@ def _market_order(symbol: str, instruction: str, quantity: float) -> dict:
     }
 
 
-async def _evaluate_symbol(client: SchwabClient, symbol: str) -> Optional[dict]:
-    history = await client.get_price_history(
-        symbol,
-        periodType="day",
-        period=1,
-        frequencyType="minute",
-        frequency=1,
-        needExtendedHoursData=False,
-    )
-    candles = history.get("candles")
-    if not isinstance(candles, list) or len(candles) < MIN_CANDLES:
-        return None
-    compute_kd(candles, k_period=K_PERIOD, d_period=D_PERIOD)
-    signal = kd_signal(candles, oversold=OVERSOLD, overbought=OVERBOUGHT)
-    last = candles[-1]
-    return {"close": last.get("close"), "k": last.get("k"), "d": last.get("d"), "signal": signal}
+def _reset_orb_day_if_new(now: datetime) -> None:
+    today = now.date().isoformat()
+    orb_day = STATE["orb_day"]
+    if orb_day.get("date") != today:
+        orb_day["date"] = today
+        orb_day["consecutive_losses"] = 0
+        for symbol_state in STATE["symbols"].values():
+            symbol_state["entries_today"] = 0
+            symbol_state["position"] = None  # safety net; should already be flat from EOD
+
+
+# ---------------------------------------------------------------------------
+# Generic account-level risk controls (strategy-agnostic; unchanged from the
+# earlier K/D-based monitor).
+# ---------------------------------------------------------------------------
 
 
 async def _update_circuit_breaker(settings: Settings, account: dict) -> None:
@@ -216,7 +161,10 @@ async def _update_circuit_breaker(settings: Settings, account: dict) -> None:
 
 
 async def _run_stop_losses(client: SchwabClient, settings: Settings, account: dict) -> None:
-    allowed, reason = _trading_allowed("stop_loss")
+    """Blanket account-wide safety net (independent of ORB's own tighter,
+    ATR-based per-trade stop): force-sell anything down more than
+    SCHWAB_STOP_LOSS_PCT from average cost, no matter the strategy."""
+    allowed, _ = _trading_allowed("stop_loss")
     if not allowed:
         return
 
@@ -230,7 +178,7 @@ async def _run_stop_losses(client: SchwabClient, settings: Settings, account: di
         symbol_state = STATE["symbols"].setdefault(symbol, {})
         today = _today_str()
         if symbol_state.get("stop_loss_triggered_on") == today:
-            continue  # already force-sold today; don't refire every poll
+            continue
 
         order_body = _market_order(symbol, "SELL", quantity)
         try:
@@ -242,7 +190,7 @@ async def _run_stop_losses(client: SchwabClient, settings: Settings, account: di
                 source="stop_loss",
             )
             symbol_state["stop_loss_triggered_on"] = today
-            symbol_state["last_acted_signal"] = "SELL"
+            symbol_state["position"] = None
             await activity_log.log_event(
                 event_type="stop_loss_triggered",
                 account_id=settings.schwab_account_id,
@@ -258,168 +206,399 @@ async def _run_stop_losses(client: SchwabClient, settings: Settings, account: di
             pass  # already logged inside submit_order
 
 
-async def _maybe_trade(client: SchwabClient, settings: Settings, account_id: str, symbol: str, evaluation: dict) -> None:
-    signal = evaluation["signal"]
+def _daily_order_value_remaining(settings: Settings, buying_power: float, account_value: float) -> float:
+    """Remaining BUY budget for today: never more than the account's actual
+    buying power, minus BUY orders submitted today whose effect on that
+    buying power we can't yet confirm. See _reserve_daily_order_value.
+    """
+    tracker = STATE["daily_order_value"]
+    today = _today_str()
+    if tracker.get("date") != today:
+        tracker["date"] = today
+        tracker["pending"] = []
+        tracker["last_seen_buying_power"] = None
+
+    pending = tracker["pending"]
+    prev_bp = tracker["last_seen_buying_power"]
+    if prev_bp is not None and pending:
+        drop = prev_bp - buying_power
+        while pending and drop >= pending[0] - 1e-6:
+            drop -= pending.pop(0)
+    tracker["last_seen_buying_power"] = buying_power
+
+    pending_total = sum(pending)
+    tracker["pending_total"] = pending_total
+
+    cap = min(buying_power, account_value * settings.schwab_max_daily_order_value_pct)
+    tracker["cap"] = cap
+    return cap - pending_total
+
+
+def _reserve_daily_order_value(amount: float) -> None:
+    tracker = STATE["daily_order_value"]
+    today = _today_str()
+    if tracker.get("date") != today:
+        tracker["date"] = today
+        tracker["pending"] = []
+        tracker["last_seen_buying_power"] = None
+    tracker["pending"].append(amount)
+    tracker["pending_total"] = sum(tracker["pending"])
+
+
+# ---------------------------------------------------------------------------
+# ORB indicators
+# ---------------------------------------------------------------------------
+
+
+async def _refresh_rvol_baseline(client: SchwabClient, symbol: str) -> dict:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+    history = await client.get_price_history(
+        symbol,
+        periodType="day",
+        frequencyType="minute",
+        frequency=1,
+        startDate=int(start.timestamp() * 1000),
+        endDate=int(end.timestamp() * 1000),
+        needExtendedHoursData=False,
+    )
+    candles = history.get("candles") or []
+    today = _today_str()
+    by_date: dict[str, list[dict]] = {}
+    for c in candles:
+        d = orb.candle_et_time(c).date().isoformat()
+        if d == today:
+            continue
+        by_date.setdefault(d, []).append(c)
+    recent_dates = sorted(by_date.keys())[-RVOL_BASELINE_DAYS:]
+    if not recent_dates:
+        return {}
+    daily_curves = [orb.cumulative_volume_by_minute(by_date[d]) for d in recent_dates]
+    return orb.average_baseline_curve(daily_curves)
+
+
+async def _compute_symbol_indicators(client: SchwabClient, symbol: str, now: datetime) -> None:
     symbol_state = STATE["symbols"].setdefault(symbol, {})
+    today = _today_str()
 
-    if signal == "HOLD":
+    if symbol_state.get("rvol_baseline_date") != today:
+        try:
+            symbol_state["rvol_baseline"] = await _refresh_rvol_baseline(client, symbol)
+        except Exception as exc:  # noqa: BLE001
+            symbol_state.setdefault("rvol_baseline", {})
+            await activity_log.log_event(
+                event_type="monitor_error", symbol=symbol, status="error",
+                detail={"phase": "rvol_baseline"}, error=str(exc),
+            )
+        symbol_state["rvol_baseline_date"] = today
+
+    history = await client.get_price_history(
+        symbol,
+        periodType="day",
+        period=1,
+        frequencyType="minute",
+        frequency=1,
+        needExtendedHoursData=False,
+    )
+    candles = history.get("candles") or []
+    if not candles:
         return
-    if symbol_state.get("last_acted_signal") == signal:
-        return  # already acted on this signal; wait for it to flip before trading again
 
-    allowed, block_reason = _trading_allowed("buy" if signal == "BUY" else "sell")
+    last = candles[-1]
+    or_range = orb.compute_opening_range(candles)
+    baseline = symbol_state.get("rvol_baseline") or {}
+    today_curve = orb.cumulative_volume_by_minute(candles)
+    rvol = orb.compute_rvol(today_curve, baseline, orb.candle_et_time(last).time()) if baseline else None
+
+    symbol_state["close"] = last.get("close")
+    symbol_state["or_high"] = or_range[0] if or_range else None
+    symbol_state["or_low"] = or_range[1] if or_range else None
+    symbol_state["vwap"] = orb.compute_vwap(candles)
+    symbol_state["atr"] = orb.compute_atr(candles, period=14)
+    symbol_state["rvol"] = rvol
+    symbol_state["checked_at"] = now.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# ORB position management (exits) and entries
+# ---------------------------------------------------------------------------
+
+
+async def _manage_position(client: SchwabClient, settings: Settings, symbol: str, now: datetime, account: dict) -> None:
+    symbol_state = STATE["symbols"].get(symbol) or {}
+    position = symbol_state.get("position")
+    if not position:
+        return
+
+    close = symbol_state.get("close")
+    or_low = symbol_state.get("or_low")
+    vwap = symbol_state.get("vwap")
+    if close is None:
+        return
+
+    entry_price = position["entry_price"]
+    stop_price = position["stop_price"]
+    # R-multiple is always measured against the *original* risk distance, not
+    # the current stop (which moves to breakeven after target1) — otherwise
+    # entry_price - stop_price hits 0 post-breakeven and r_multiple() would
+    # permanently return None, silently disabling the target2 exit.
+    r = orb.r_multiple(entry_price, position["initial_stop_price"], close)
+    position["r_multiple"] = r
+
+    exit_reason: Optional[str] = None
+    exit_half = False
+    gate_action = "sell"
+
+    if orb.is_past_flatten_time(now):
+        exit_reason, gate_action = "eod_flatten", "eod_flatten"
+    elif close <= stop_price:
+        exit_reason, gate_action = "stop_hit", "stop_loss"
+    elif or_low is not None and close < or_low:
+        exit_reason = "back_in_range"
+    elif vwap is not None and close < vwap:
+        exit_reason = "vwap_cross_back"
+    elif r is not None and r >= settings.schwab_orb_target2_r:
+        exit_reason = "target2"
+    elif r is not None and r >= settings.schwab_orb_target1_r and not position.get("half_closed") and position["shares"] > 1:
+        exit_reason, exit_half = "target1", True
+    else:
+        entry_time = datetime.fromisoformat(position["entry_time"])
+        minutes_open = (now - entry_time).total_seconds() / 60
+        if minutes_open >= settings.schwab_orb_time_stop_minutes and (r is None or r < settings.schwab_orb_time_stop_r):
+            exit_reason = "time_stop"
+
+    if exit_reason is None:
+        return
+
+    allowed, _ = _trading_allowed(gate_action)
     if not allowed:
-        await activity_log.log_event(
-            event_type="order_skipped",
-            account_id=account_id,
-            symbol=symbol,
-            status="skipped",
-            detail={"reason": block_reason},
-        )
+        return  # paused; leave the position as-is and re-check next poll
+
+    held_qty = extract_position_qty(account, symbol)
+    if held_qty <= 0:
+        # Our tracked position is stale (closed some other way) — clear it.
+        symbol_state["position"] = None
         return
 
-    try:
-        account = await client.get_account(account_id)
-    except Exception as exc:  # noqa: BLE001
-        await activity_log.log_event(
-            event_type="order_skipped",
-            account_id=account_id,
-            symbol=symbol,
-            status="error",
-            detail={"reason": "account_lookup_failed"},
-            error=str(exc),
-        )
-        return
+    shares = min(max(1, position["shares"] // 2) if exit_half else position["shares"], held_qty)
 
-    close = evaluation.get("close")
-
-    if signal == "BUY":
-        buying_power = extract_buying_power(account)
-        account_value = extract_equity(account)
-        if not buying_power or not close or not account_value:
-            await activity_log.log_event(
-                event_type="order_skipped",
-                account_id=account_id,
-                symbol=symbol,
-                status="skipped",
-                detail={"reason": "no_buying_power_data"},
-            )
-            return
-        max_spend = buying_power * settings.schwab_max_position_pct
-        quantity = math.floor(max_spend / close)
-        if quantity < 1:
-            await activity_log.log_event(
-                event_type="order_skipped",
-                account_id=account_id,
-                symbol=symbol,
-                status="skipped",
-                detail={
-                    "reason": "insufficient_funds",
-                    "buying_power": buying_power,
-                    "close": close,
-                    "max_spend": max_spend,
-                    "max_position_pct": settings.schwab_max_position_pct,
-                },
-            )
-            return
-
-        # Total-exposure cap: shrink (or skip) the buy so this symbol's total
-        # position never exceeds max_symbol_exposure_pct of account value,
-        # even after repeated BUY signals on separate crossovers.
-        existing_value = extract_position_market_value(account, symbol)
-        max_exposure = account_value * settings.schwab_max_symbol_exposure_pct
-        headroom = max_exposure - existing_value
-        if headroom < close:
-            await activity_log.log_event(
-                event_type="order_skipped",
-                account_id=account_id,
-                symbol=symbol,
-                status="skipped",
-                detail={
-                    "reason": "symbol_exposure_cap_reached",
-                    "existing_value": existing_value,
-                    "max_exposure": max_exposure,
-                    "max_symbol_exposure_pct": settings.schwab_max_symbol_exposure_pct,
-                },
-            )
-            return
-        quantity = min(quantity, math.floor(headroom / close))
-
-        # Daily order-value cap: independent of Schwab's reported buying power
-        # (which can lag a moment behind an order just submitted), stop BUYing
-        # once our own tally of today's submitted BUY notional hits the cap.
-        remaining_daily_budget = _daily_order_value_remaining(settings, buying_power, account_value)
-        if remaining_daily_budget < close:
-            await activity_log.log_event(
-                event_type="order_skipped",
-                account_id=account_id,
-                symbol=symbol,
-                status="skipped",
-                detail={
-                    "reason": "daily_order_value_cap_reached",
-                    "remaining_daily_budget": remaining_daily_budget,
-                    "cap": STATE["daily_order_value"]["cap"],
-                    "max_daily_order_value_pct": settings.schwab_max_daily_order_value_pct,
-                },
-            )
-            return
-        quantity = min(quantity, math.floor(remaining_daily_budget / close))
-
-        order_body = _market_order(symbol, "BUY", quantity)
-        order_notional = quantity * close
-    else:  # SELL
-        order_notional = None
-        held_qty = extract_position_qty(account, symbol)
-        if held_qty <= 0:
-            await activity_log.log_event(
-                event_type="order_skipped",
-                account_id=account_id,
-                symbol=symbol,
-                status="skipped",
-                detail={"reason": "no_position_to_sell"},
-            )
-            return
-        order_body = _market_order(symbol, "SELL", held_qty)
-
+    order_body = _market_order(symbol, "SELL", shares)
     try:
         await submit_order(
             client=client,
             settings=settings,
-            account_id=account_id,
+            account_id=settings.schwab_account_id,
             order_body=order_body,
-            source="monitor",
+            source=f"orb_{exit_reason}",
         )
-        symbol_state["last_acted_signal"] = signal
-        if order_notional is not None:
-            _reserve_daily_order_value(order_notional)
     except Exception:  # noqa: BLE001
-        pass  # already logged inside submit_order
+        return  # already logged inside submit_order; retry next poll
+
+    await activity_log.log_event(
+        event_type="orb_exit",
+        account_id=settings.schwab_account_id,
+        symbol=symbol,
+        status=exit_reason,
+        detail={"r_multiple": r, "shares": shares, "half_close": exit_half},
+    )
+
+    if exit_half:
+        position["shares"] -= shares
+        position["half_closed"] = True
+        position["stop_price"] = entry_price  # move stop to breakeven
+    else:
+        if (r if r is not None else -1) < 0:
+            STATE["orb_day"]["consecutive_losses"] += 1
+        else:
+            STATE["orb_day"]["consecutive_losses"] = 0
+        symbol_state["position"] = None
+
+
+async def _maybe_enter_orb(
+    client: SchwabClient,
+    settings: Settings,
+    symbol: str,
+    now: datetime,
+    quotes: dict,
+    account: dict,
+) -> None:
+    symbol_state = STATE["symbols"].setdefault(symbol, {})
+
+    if symbol_state.get("position"):
+        return
+    if symbol_state.get("entries_today", 0) >= settings.schwab_orb_max_trades_per_symbol:
+        return
+    if STATE["orb_day"]["consecutive_losses"] >= settings.schwab_orb_max_consecutive_losses:
+        return
+    if not orb.is_entry_window(now):
+        return
+
+    allowed, block_reason = _trading_allowed("buy")
+    if not allowed:
+        return
+
+    group = orb.correlation_group(symbol)
+    for other_symbol, other_state in STATE["symbols"].items():
+        if other_symbol != symbol and orb.correlation_group(other_symbol) == group and other_state.get("position"):
+            await activity_log.log_event(
+                event_type="order_skipped", account_id=settings.schwab_account_id, symbol=symbol, status="skipped",
+                detail={"reason": "correlated_group_position_open", "group": group, "blocking_symbol": other_symbol},
+            )
+            return
+
+    existing_qty = extract_position_qty(account, symbol)
+    if existing_qty > 0:
+        await activity_log.log_event(
+            event_type="order_skipped", account_id=settings.schwab_account_id, symbol=symbol, status="skipped",
+            detail={"reason": "unexpected_existing_position", "existing_qty": existing_qty},
+        )
+        return
+
+    close = symbol_state.get("close")
+    or_high = symbol_state.get("or_high")
+    or_low = symbol_state.get("or_low")
+    vwap = symbol_state.get("vwap")
+    atr = symbol_state.get("atr")
+    rvol = symbol_state.get("rvol")
+    if None in (close, or_high, or_low, vwap):
+        return
+
+    if is_halted(quotes, symbol):
+        await activity_log.log_event(
+            event_type="order_skipped", account_id=settings.schwab_account_id, symbol=symbol, status="skipped",
+            detail={"reason": "halted_or_no_quote"},
+        )
+        return
+
+    bid, ask = extract_bid_ask(quotes, symbol)
+    spread_pct = orb.compute_spread_pct(bid, ask)
+    symbol_state["spread_pct"] = spread_pct
+
+    ref_symbol = orb.market_reference_symbol(symbol)
+    ref_state = STATE["symbols"].get(ref_symbol) or {}
+
+    ctx = orb.EntryContext(
+        price=close,
+        or_high=or_high,
+        or_low=or_low,
+        vwap=vwap,
+        atr=atr,
+        rvol=rvol,
+        spread_pct=spread_pct,
+        market_price=ref_state.get("close"),
+        market_vwap=ref_state.get("vwap"),
+        rvol_min=settings.schwab_orb_rvol_min,
+        spread_max_pct=settings.schwab_orb_spread_max_pct,
+        or_width_min_atr=settings.schwab_orb_or_width_min_atr,
+        or_width_max_atr=settings.schwab_orb_or_width_max_atr,
+    )
+    passed, checks = orb.evaluate_long_entry(ctx)
+    symbol_state["entry_checks"] = checks
+
+    await activity_log.log_event(
+        event_type="signal_check",
+        account_id=settings.schwab_account_id,
+        symbol=symbol,
+        status="BUY" if passed else "HOLD",
+        detail={
+            "checks": checks, "close": close, "or_high": or_high, "or_low": or_low,
+            "vwap": vwap, "atr": atr, "rvol": rvol, "spread_pct": spread_pct,
+        },
+    )
+
+    if not passed or atr is None or atr <= 0:
+        return
+
+    stop_price = orb.compute_stop_price(close, or_high, atr, settings.schwab_orb_stop_atr_mult)
+    risk_per_share = close - stop_price
+    if risk_per_share <= 0:
+        return
+
+    account_value = extract_equity(account)
+    buying_power = extract_buying_power(account)
+    if not account_value or not buying_power:
+        await activity_log.log_event(
+            event_type="order_skipped", account_id=settings.schwab_account_id, symbol=symbol, status="skipped",
+            detail={"reason": "no_account_data"},
+        )
+        return
+
+    risk_amount = account_value * settings.schwab_orb_risk_pct
+    risk_based_shares = math.floor(risk_amount / risk_per_share)
+
+    pct_cap_shares = math.floor((buying_power * settings.schwab_max_position_pct) / close)
+    existing_value = extract_position_market_value(account, symbol)
+    exposure_headroom = (account_value * settings.schwab_max_symbol_exposure_pct) - existing_value
+    exposure_cap_shares = math.floor(exposure_headroom / close) if exposure_headroom > 0 else 0
+    daily_remaining = _daily_order_value_remaining(settings, buying_power, account_value)
+    daily_cap_shares = math.floor(daily_remaining / close) if daily_remaining > 0 else 0
+
+    quantity = min(risk_based_shares, pct_cap_shares, exposure_cap_shares, daily_cap_shares)
+    if quantity < 1:
+        await activity_log.log_event(
+            event_type="order_skipped", account_id=settings.schwab_account_id, symbol=symbol, status="skipped",
+            detail={
+                "reason": "position_size_zero",
+                "risk_based_shares": risk_based_shares,
+                "pct_cap_shares": pct_cap_shares,
+                "exposure_cap_shares": exposure_cap_shares,
+                "daily_cap_shares": daily_cap_shares,
+            },
+        )
+        return
+
+    order_body = _market_order(symbol, "BUY", quantity)
+    try:
+        await submit_order(
+            client=client,
+            settings=settings,
+            account_id=settings.schwab_account_id,
+            order_body=order_body,
+            source="orb_entry",
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+    _reserve_daily_order_value(quantity * close)
+    symbol_state["entries_today"] = symbol_state.get("entries_today", 0) + 1
+    symbol_state["position"] = {
+        "entry_price": close,
+        "stop_price": stop_price,
+        "initial_stop_price": stop_price,
+        "shares": quantity,
+        "initial_shares": quantity,
+        "half_closed": False,
+        "entry_time": now.isoformat(),
+        "r_multiple": 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Poll loop
+# ---------------------------------------------------------------------------
 
 
 async def _poll_once(settings: Settings) -> None:
     client = get_schwab_client(settings)
     try:
         watchlist = load_watchlist(settings)
-        market_open = is_market_open()
+        now = datetime.now(MARKET_TZ)
+        market_open = is_market_open(now)
         STATE["market_open"] = market_open
-        STATE["last_poll"] = datetime.now(MARKET_TZ).isoformat()
+        STATE["last_poll"] = now.isoformat()
+
+        _reset_orb_day_if_new(now)
 
         if not market_open:
             return
 
-        # One account snapshot per cycle drives the circuit breaker and
-        # stop-loss checks across *all* held positions (not just watchlist
-        # symbols), independent of per-symbol K/D signals below.
         try:
             account_snapshot = await client.get_account(settings.schwab_account_id)
         except Exception as exc:  # noqa: BLE001
             account_snapshot = None
             await activity_log.log_event(
-                event_type="monitor_error",
-                account_id=settings.schwab_account_id,
-                status="error",
-                detail={"phase": "account_snapshot"},
-                error=str(exc),
+                event_type="monitor_error", account_id=settings.schwab_account_id, status="error",
+                detail={"phase": "account_snapshot"}, error=str(exc),
             )
 
         if account_snapshot is not None:
@@ -429,35 +608,42 @@ async def _poll_once(settings: Settings) -> None:
         if not watchlist:
             return
 
-        for symbol in watchlist:
+        # SPY/QQQ are always evaluated too (even if not on the watchlist) since
+        # every other symbol's market-direction filter references one of them.
+        symbols_to_process = list(dict.fromkeys(watchlist + ["SPY", "QQQ"]))
+        for symbol in symbols_to_process:
             try:
-                evaluation = await _evaluate_symbol(client, symbol)
+                await _compute_symbol_indicators(client, symbol, now)
             except Exception as exc:  # noqa: BLE001
-                await activity_log.log_event(
-                    event_type="signal_check",
-                    account_id=settings.schwab_account_id,
-                    symbol=symbol,
-                    status="error",
-                    error=str(exc),
-                )
-                continue
+                await activity_log.log_event(event_type="signal_check", symbol=symbol, status="error", error=str(exc))
 
-            if evaluation is None:
-                continue
+        if account_snapshot is not None:
+            for symbol in watchlist:
+                try:
+                    await _manage_position(client, settings, symbol, now, account_snapshot)
+                except Exception as exc:  # noqa: BLE001
+                    await activity_log.log_event(
+                        event_type="monitor_error", symbol=symbol, status="error",
+                        detail={"phase": "manage_position"}, error=str(exc),
+                    )
 
-            symbol_state = STATE["symbols"].setdefault(symbol, {})
-            symbol_state.update(evaluation)
-            symbol_state["checked_at"] = STATE["last_poll"]
+            if orb.is_entry_window(now):
+                try:
+                    quotes = await client.get_quotes(watchlist)
+                except Exception as exc:  # noqa: BLE001
+                    quotes = {}
+                    await activity_log.log_event(
+                        event_type="monitor_error", status="error", detail={"phase": "quotes"}, error=str(exc)
+                    )
 
-            await activity_log.log_event(
-                event_type="signal_check",
-                account_id=settings.schwab_account_id,
-                symbol=symbol,
-                status=evaluation["signal"],
-                detail=evaluation,
-            )
-
-            await _maybe_trade(client, settings, settings.schwab_account_id, symbol, evaluation)
+                for symbol in watchlist:
+                    try:
+                        await _maybe_enter_orb(client, settings, symbol, now, quotes, account_snapshot)
+                    except Exception as exc:  # noqa: BLE001
+                        await activity_log.log_event(
+                            event_type="monitor_error", symbol=symbol, status="error",
+                            detail={"phase": "orb_entry"}, error=str(exc),
+                        )
     finally:
         await client.aclose()
 

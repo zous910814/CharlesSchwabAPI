@@ -164,3 +164,17 @@ class SchwabClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def get_quotes(self, symbols: list[str]) -> dict:
+        """Real-time quotes (bid/ask/last) for one or more symbols, keyed by symbol."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"symbols": ",".join(symbols)}
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/marketdata/v1/quotes",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()

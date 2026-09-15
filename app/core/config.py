@@ -35,6 +35,22 @@ class Settings(BaseSettings):
     # power hasn't yet caught up with an order submitted moments earlier.
     schwab_max_daily_order_value_pct: float = Field(0.20, env="SCHWAB_MAX_DAILY_ORDER_VALUE_PCT")
 
+    # ORB (Opening Range Breakout) strategy — app/strategy/orb.py + monitor.py.
+    # Position sizing: shares = floor(account_equity * risk_pct / |entry - stop|).
+    schwab_orb_risk_pct: float = Field(0.0015, env="SCHWAB_ORB_RISK_PCT")
+    # Initial stop = entry - max(stop_atr_mult * ATR(14), entry - OR_High).
+    schwab_orb_stop_atr_mult: float = Field(0.5, env="SCHWAB_ORB_STOP_ATR_MULT")
+    schwab_orb_rvol_min: float = Field(1.5, env="SCHWAB_ORB_RVOL_MIN")
+    schwab_orb_spread_max_pct: float = Field(0.0005, env="SCHWAB_ORB_SPREAD_MAX_PCT")
+    schwab_orb_or_width_min_atr: float = Field(0.3, env="SCHWAB_ORB_OR_WIDTH_MIN_ATR")
+    schwab_orb_or_width_max_atr: float = Field(1.5, env="SCHWAB_ORB_OR_WIDTH_MAX_ATR")
+    schwab_orb_max_trades_per_symbol: int = Field(2, env="SCHWAB_ORB_MAX_TRADES_PER_SYMBOL")
+    schwab_orb_max_consecutive_losses: int = Field(3, env="SCHWAB_ORB_MAX_CONSECUTIVE_LOSSES")
+    schwab_orb_time_stop_minutes: int = Field(15, env="SCHWAB_ORB_TIME_STOP_MINUTES")
+    schwab_orb_time_stop_r: float = Field(0.5, env="SCHWAB_ORB_TIME_STOP_R")
+    schwab_orb_target1_r: float = Field(1.0, env="SCHWAB_ORB_TARGET1_R")
+    schwab_orb_target2_r: float = Field(1.5, env="SCHWAB_ORB_TARGET2_R")
+
     class Config:
         case_sensitive = False
 

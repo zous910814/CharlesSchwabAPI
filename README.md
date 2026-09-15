@@ -1,24 +1,29 @@
 # Schwab FastAPI Skeleton
 
-A minimal FastAPI service that handles Charles Schwab OAuth, runs a live K/D-signal monitor against a watchlist during market hours, places orders (with pre-trade risk checks), and shows all of it on a built-in dashboard.
+A minimal FastAPI service that handles Charles Schwab OAuth, runs a live Opening Range Breakout (ORB) intraday strategy against a watchlist during market hours, places orders (with pre-trade risk checks), and shows all of it on a built-in dashboard.
 
 ## Project layout
 ```
 app/
   main.py                 # FastAPI app; wires up routers, starts/stops the monitor loop and activity log DB
-  core/config.py          # Settings loaded from env/.env via pydantic (dry-run, watchlist, risk, poll cadence)
+  core/config.py          # Settings loaded from env/.env via pydantic (dry-run, watchlist, risk, ORB params)
   core/activity_log.py    # SQLite-backed log of every order/signal event (activity_log.db)
   core/order_executor.py  # submit_order(): shared preview/live + logging path for manual and automated orders
-  core/monitor.py         # Background loop: polls watchlist during market hours, computes K/D, trades within risk limits
-  clients/schwab.py        # Schwab API client: token refresh, code exchange, orders, account balances, price history
+  core/monitor.py         # Background loop: polls watchlist during market hours, runs the ORB strategy
+  core/account.py         # Parses Schwab account responses: buying power, equity, positions, day P&L
+  core/quotes.py          # Parses Schwab quotes responses: bid/ask, halt status
+  core/deps.py            # Shared SchwabClient FastAPI dependency
+  clients/schwab.py        # Schwab API client: token refresh, code exchange, orders, account, price history, quotes
   routers/accounts.py      # GET /accounts/login — starts the OAuth flow
   routers/auth.py          # GET /accounts/callback — exchanges code for tokens
   routers/orders.py        # POST /orders/{account_id} — places an order, logs every attempt/result
-  routers/dashboard.py     # GET /dashboard, GET /api/activity, GET /api/monitor/status
+  routers/dashboard.py     # GET /dashboard, GET /api/activity, GET /api/monitor/status, GET /api/portfolio
   schemas/order.py         # OrderRequest/OrderLeg pydantic models
-  strategy/kd.py           # Pure-Python stochastic %K/%D + crossover signal (BUY/SELL/HOLD)
-  templates/dashboard.html # Dashboard page (vanilla HTML/JS, polls the two API endpoints above)
+  strategy/orb.py          # Pure-Python ORB indicators (OR, VWAP, ATR, RVOL, spread) + entry-rule evaluation
+  strategy/kd.py           # Unused by the monitor now (kept in case you want a simpler strategy again)
+  templates/dashboard.html # Dashboard page (vanilla HTML/JS, polls the API endpoints above)
 watchlist.json           # Symbols the monitor loop evaluates every poll cycle
+stock trading strategy.md # The ORB spec this implementation follows — see it for full rationale/detail
 requirements.txt
 .env
 cert.pem / key.pem      # local TLS certs for the HTTPS redirect URI
@@ -48,7 +53,7 @@ Visiting the server's root URL (`/`) also redirects to `/accounts/login`.
 - `POST /orders/{account_id}` — places an order; see [Orders & the dry-run flag](#orders--the-dry-run-flag)
 - `GET /dashboard` — activity viewer; see [Dashboard](#dashboard)
 - `GET /api/activity` — JSON feed behind the dashboard (`limit`, `symbol`, `status`, `event_type` query params)
-- `GET /api/monitor/status` — current monitor state (market open/closed, manual pause, circuit breaker, last poll, per-symbol close/%K/%D/signal)
+- `GET /api/monitor/status` — current monitor state (market open/closed, manual pause, circuit breaker, daily order-value ledger, last poll, per-symbol close/OR/VWAP/RVOL/spread/open position)
 - `POST /api/monitor/pause` / `POST /api/monitor/resume` — emergency stop: pause/resume all automated trading (BUY/SELL/stop-loss) without restarting the server
 - `GET /api/portfolio` — current buying power, account value, and held positions (qty, average cost, current price, market value, unrealized P&L) straight from Schwab's account endpoint
 
@@ -75,33 +80,74 @@ Every call — dry-run or live — writes an `order_submitted` event and an `ord
 ## Dashboard
 `GET /dashboard` (e.g. `https://127.0.0.1:8000/dashboard`) has three parts:
 - **Portfolio** — buying power, total account value, and every held position with average cost, live current price, market value, and unrealized P&L ($ and %), pulled straight from Schwab's account endpoint (`GET /api/portfolio`).
-- **Live Monitor** — market open/closed badge, circuit-breaker badge, a Pause/Resume button, last poll time + today's P&L, and a per-symbol snapshot (close, %K, %D, current signal) from `app/core/monitor.py`'s in-memory state.
-- **Activity table** — every order attempt and its outcome — status (`success`/`failed`/`error`/`dry_run`/`sent`/`skipped`/`BUY`/`SELL`/`HOLD`), symbol, account, and the full request/response as expandable JSON. Filter by symbol, status, or event type.
+- **Live Monitor** — market open/closed badge, circuit-breaker badge, a Pause/Resume button, last poll time + today's P&L, and a per-symbol snapshot (close, opening-range low–high, VWAP, RVOL, spread%, and any open ORB position with its current R-multiple) from `app/core/monitor.py`'s in-memory state.
+- **Activity table** — every order/strategy event — status (`success`/`failed`/`error`/`dry_run`/`sent`/`skipped`/`BUY`/`HOLD`/`target1`/`target2`/`stop_hit`/`time_stop`/`eod_flatten`/…), symbol, account, and the full request/response as expandable JSON. Filter by symbol, status, or event type.
 
 Both auto-refresh every 5s. Data comes from `activity_log.db` (SQLite, created automatically on startup) via `app/core/activity_log.py`; there's nothing else to configure.
 
-## Live monitor & auto-trading
-`app/core/monitor.py` runs as a background task for the life of the server (started/stopped in `app/main.py`'s lifespan). Every `MONITOR_POLL_SECONDS` (default 60) while the market is open (Mon-Fri 09:30-16:00 America/New_York — **does not account for market holidays**), it:
-1. Reads symbols from `watchlist.json` (`WATCHLIST_PATH` to change the file).
-2. Takes one account snapshot (balances + positions) and runs the risk controls below (circuit breaker, stop-loss) across *everything currently held*, not just watchlist symbols.
-3. Fetches today's 1-minute bars per watchlist symbol and computes stochastic %K/%D (14/5 periods, in `app/strategy/kd.py`).
-4. Derives a signal: **BUY** when %K crosses above %D while oversold (<20), **SELL** when %K crosses below %D while overbought (>80), else **HOLD**. Every check is logged as a `signal_check` event.
-5. On a BUY/SELL that differs from the last signal already acted on for that symbol (so it won't refire every poll while the crossover state persists), it applies the per-trade risk checks before trading.
+## Live monitor & the ORB strategy
+`app/core/monitor.py` runs as a background task for the life of the server (started/stopped in `app/main.py`'s lifespan), implementing the Opening Range Breakout strategy specified in **`stock trading strategy.md`** — read that file for the full rationale; this section covers what's actually implemented and how it maps to config.
 
-Orders that clear all risk checks go through the same `submit_order()` path as the manual `/orders` endpoint — so they respect `SCHWAB_DRY_RUN` identically (dry-run sends to Schwab's `previewOrder`, live sends a real order) and log identically, tagged `"source": "monitor"` / `"stop_loss"` vs `"manual"` in the detail JSON.
+Every `MONITOR_POLL_SECONDS` (default 60) while the market is open (Mon-Fri 09:30-16:00 America/New_York — **does not account for market holidays**):
+1. Reads symbols from `watchlist.json` (`WATCHLIST_PATH` to change the file); SPY and QQQ are always evaluated too (even if not listed) since they're the market-direction reference for every other symbol.
+2. Takes one account snapshot and runs the account-wide risk controls (circuit breaker, blanket stop-loss) across *everything currently held*, not just watchlist symbols.
+3. For each symbol, fetches today's 1-minute bars and computes: **opening range** (high/low of the 09:30:00-09:34:59 bars), **VWAP** (cumulative from 09:30, bar-based typical price), **ATR(14)** (simple average of true range, not Wilder-smoothed), and **RVOL** (today's cumulative volume-by-minute vs. the average of the last 20 trading days' curves at the same minute — fetched once per symbol per day and cached).
+4. Manages any open position first (see **Exits** below), then — only inside the 09:35-11:00 entry window — fetches a batched real-time quote for the whole watchlist and evaluates each symbol without a position against the **entry rules**.
+
+### Entry rules (long only — see [What's not implemented](#whats-not-implemented))
+All of the following must hold (`app/strategy/orb.py::evaluate_long_entry`), logged as a `signal_check` event either way so you can see exactly which condition failed:
+1. Latest 1-minute close breaks above the opening-range high.
+2. Close is above VWAP.
+3. RVOL ≥ `SCHWAB_ORB_RVOL_MIN` (default 1.5).
+4. Live bid/ask spread ≤ `SCHWAB_ORB_SPREAD_MAX_PCT` (default 0.05%).
+5. Market direction aligned: Nasdaq-linked symbols (`QQQ, AAPL, NVDA, MSFT, AMD, TSLA`) confirm against QQQ's own VWAP; everything else confirms against SPY's.
+6. Opening-range width is sane relative to volatility: between `SCHWAB_ORB_OR_WIDTH_MIN_ATR` and `SCHWAB_ORB_OR_WIDTH_MAX_ATR` × ATR(14) (default 0.3–1.5×) — rejects gappy/anomalous ranges.
+
+A symbol is also skipped (no entry) if: it already has an open position, it's already hit `SCHWAB_ORB_MAX_TRADES_PER_SYMBOL` (default 2) entries today, today's consecutive-loss count has hit `SCHWAB_ORB_MAX_CONSECUTIVE_LOSSES` (default 3), its quote shows `securityStatus != "Normal"` (halt/anomaly), or another symbol in the same correlation group (see below) already has an open position.
+
+**Position size** is risk-based, then clamped by the existing account-wide caps:
+```
+stop_price   = entry_price - max(SCHWAB_ORB_STOP_ATR_MULT * ATR, entry_price - OR_High)
+risk_shares  = floor(account_equity * SCHWAB_ORB_RISK_PCT / (entry_price - stop_price))
+final_shares = min(risk_shares, per-trade cap, per-symbol exposure cap, daily order-value cap)
+```
+(the last three caps are the same account-wide ones listed in [Risk controls](#risk-controls) below).
+
+### Exits (`app/core/monitor.py::_manage_position`, logged as `orb_exit`)
+Checked in this order every poll, on the current 1-minute close, against the *original* stop distance (R doesn't reset when the stop is later moved):
+1. **`eod_flatten`** — past 15:55 ET: close the whole position. Never blocked by manual pause (a paused bot should still not hold overnight).
+2. **`stop_hit`** — close ≤ stop price: close the whole position. Blocked only by manual pause (bypasses the circuit breaker, matching the account-wide stop-loss's precedent).
+3. **`back_in_range`** — close drops back below the opening-range low: close the whole position.
+4. **`vwap_cross_back`** — close drops back below VWAP: close the whole position.
+5. **`target2`** — R-multiple ≥ `SCHWAB_ORB_TARGET2_R` (default 1.5): close whatever remains.
+6. **`target1`** — R-multiple ≥ `SCHWAB_ORB_TARGET1_R` (default 1.0), not already taken, and more than 1 share held: sell half (rounded down), move the stop to breakeven on the rest. A 1-share position skips straight to target2/stop/time instead of trying to split.
+7. **`time_stop`** — open ≥ `SCHWAB_ORB_TIME_STOP_MINUTES` (default 15) and still below `SCHWAB_ORB_TIME_STOP_R` (default 0.5): close the whole position.
+
+Before every exit sell, the quantity is clamped to whatever Schwab actually reports as held (not just our own tracked count) — if it's already zero, the tracked position is cleared instead of erroring.
+
+Orders that clear all checks go through the same `submit_order()` path as the manual `/orders` endpoint — so they respect `SCHWAB_DRY_RUN` identically (dry-run sends to Schwab's `previewOrder`, live sends a real order) and log identically, tagged `"source": "orb_entry"` / `"orb_<exit_reason>"` / `"stop_loss"` vs `"manual"` in the detail JSON.
+
+### What's not implemented
+The spec (`stock trading strategy.md` §7, §10-13) covers more than this pass does — treat these as known gaps, not bugs:
+- **Short-selling (§7)** — long-only for now; the spec itself suggests this fallback when reliable short-locate data isn't available, which it isn't here.
+- **Correlated-position grouping (§9.4)** — simplified to two static groups (Nasdaq-linked vs. SPY/broad-market) capped at one open position per group, not a real correlation calculation.
+- **Halt/anomaly detection (§10)** — best-effort via the quote's `securityStatus` field; no earnings/event calendar exclusion.
+- **Execution model (§8)** — market orders only ("Mode A"); no marketable-limit-with-30s-cancel ("Mode B").
+- **Granularity** — decisions run on completed 1-minute bars each `MONITOR_POLL_SECONDS` (default 60s), not the 5-second/tick-level timing the spec's stress-test section implies; ATR is a simple moving average, not Wilder-smoothed.
+- **Backtesting, walk-forward validation, stress testing, and the 20-day paper-trading rollout (§11-13)** — not built this round; the spec is explicit that going live without them is skipping real diligence, so treat `SCHWAB_DRY_RUN=true` as the current substitute, not a formality.
 
 ### Risk controls
 | Control | Env var (default) | Behavior |
 |---|---|---|
 | Per-trade spend cap | `SCHWAB_MAX_POSITION_PCT` (0.05) | A BUY spends at most this fraction of current buying power. `quantity = floor(buying_power * pct / close)`; if that's 0, skipped (`insufficient_funds`) — nothing sent to Schwab. |
 | Per-symbol exposure cap | `SCHWAB_MAX_SYMBOL_EXPOSURE_PCT` (0.15) | Across repeated BUY signals, one symbol's *total* position value is capped at this fraction of account value. The buy quantity is shrunk to fit remaining headroom, or skipped entirely (`symbol_exposure_cap_reached`) if there's none left — prevents averaging down without limit. |
-| Stop-loss | `SCHWAB_STOP_LOSS_PCT` (0.10) | Every poll, any held position down more than this fraction from average cost is force-sold at market, independent of the K/D signal (logged as `stop_loss_triggered`). Fires at most once per symbol per day. Bypasses the circuit breaker (see below) but not manual pause. |
+| Blanket stop-loss | `SCHWAB_STOP_LOSS_PCT` (0.10) | Every poll, any held position down more than this fraction from average cost is force-sold at market — an account-wide backstop independent of, and looser than, ORB's own ATR-based per-trade stop (logged as `stop_loss_triggered`). Fires at most once per symbol per day. Bypasses the circuit breaker but not manual pause. |
 | Daily loss circuit breaker | `SCHWAB_DAILY_LOSS_LIMIT_PCT` (0.03) | If the sum of today's per-position floating P&L drops below this fraction of account value, new BUY/SELL trades pause for the rest of the trading day (`circuit_breaker` event, `status: tripped`) — stop-loss exits still run. Auto-resets the next calendar day. Note: this sums Schwab's per-position `currentDayProfitLoss`, which doesn't capture P&L already realized by positions closed earlier today. |
 | Daily order-value cap | `SCHWAB_MAX_DAILY_ORDER_VALUE_PCT` (0.20) | Cumulative BUY notional submitted today can never exceed the account's **actual buying power**, even when Schwab's reported balance hasn't yet caught up with an order just submitted. `app/core/monitor.py`'s `daily_order_value` tracker keeps a FIFO list of unconfirmed BUY reservations and reconciles them on every check: if buying power has dropped since the last check, that drop is assumed to be Schwab catching up with the oldest pending reservations, which are then cleared — so a confirmed buy stops being double-subtracted, and a SELL raising buying power flows straight into more same-day BUY budget. The effective cap is `min(buying_power, account_value * pct)` minus whatever's still unconfirmed-pending; `SCHWAB_MAX_DAILY_ORDER_VALUE_PCT` can only pull that tighter, never past the real balance. Skipped as `daily_order_value_cap_reached` once exhausted; resets the next calendar day. Only counts BUYs — SELLs reduce risk, so they aren't capped. |
-| Sell-what-you-hold | *(always on)* | SELL only ever sells the quantity actually held; if there's no open position, it's skipped (`no_position_to_sell`). The bot never shorts. |
-| Manual pause | Dashboard button / `POST /api/monitor/pause` | Immediately blocks every automated action — BUY, SELL, and stop-loss — without touching `.env` or restarting. `POST /api/monitor/resume` (or the dashboard button again) re-enables it. **In-memory only**: an app restart (including a `--reload` pickup) clears the pause. For a durable stop, set `SCHWAB_DRY_RUN=true` instead. |
+| Sell clamped to actual holdings | *(always on)* | Every ORB exit re-checks Schwab's reported position quantity right before selling and clamps to it (never just trusts the internally tracked share count); the bot never shorts. |
+| Manual pause | Dashboard button / `POST /api/monitor/pause` | Immediately blocks every automated action — new entries, discretionary exits (target/VWAP-cross/time-stop), and the blanket stop-loss — without touching `.env` or restarting. `eod_flatten` is the one exception and always fires regardless, so a paused bot still won't hold overnight. `POST /api/monitor/resume` (or the dashboard button again) re-enables it. **In-memory only**: an app restart (including a `--reload` pickup) clears the pause. For a durable stop, set `SCHWAB_DRY_RUN=true` instead. |
 
-Per-symbol "already acted on this signal" state, the stop-loss daily-fire flag, the manual pause, and the circuit breaker are all in-memory only and reset on restart (including `--reload`) — acceptable for a personal dev setup, worth hardening (persist to `activity_log.db`) before leaving it running unattended for long stretches.
+Per-symbol ORB day-state (opening range, entries-today count, open position, RVOL baseline cache), the stop-loss daily-fire flag, the manual pause, and the circuit breaker are all in-memory only and reset on restart (including `--reload`) — acceptable for a personal dev setup, worth hardening (persist to `activity_log.db`) before leaving it running unattended for long stretches.
 
 `extract_buying_power()` / `extract_equity()` (`app/core/account.py`) try several known Schwab balance field names in order; verified against a real margin account's response during development, but double-check against yours if it's a cash account (visible in `order_skipped`/`account_lookup_failed` detail on the dashboard).
 

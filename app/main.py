@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 
 from app.core import activity_log, monitor
 from app.core.config import get_settings
-from app.routers import accounts, auth, dashboard, orders
+from app.routers import accounts, auth, dashboard, line_webhook, orders
 
 settings = get_settings()
 
@@ -35,6 +35,7 @@ app.include_router(accounts.router)
 app.include_router(auth.router)
 app.include_router(orders.router)
 app.include_router(dashboard.router)
+app.include_router(line_webhook.router)
 
 
 @app.get("/", include_in_schema=False)

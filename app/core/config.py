@@ -1,4 +1,6 @@
 from functools import lru_cache
+from typing import Optional
+
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -50,6 +52,12 @@ class Settings(BaseSettings):
     schwab_orb_time_stop_r: float = Field(0.5, env="SCHWAB_ORB_TIME_STOP_R")
     schwab_orb_target1_r: float = Field(1.0, env="SCHWAB_ORB_TARGET1_R")
     schwab_orb_target2_r: float = Field(1.5, env="SCHWAB_ORB_TARGET2_R")
+
+    # LINE risk notifications (app/core/line_notify.py). All optional — unset
+    # means notifications are silently skipped, not an error.
+    line_channel_access_token: Optional[str] = Field(None, env="LINE_CHANNEL_ACCESS_TOKEN")
+    line_channel_secret: Optional[str] = Field(None, env="LINE_CHANNEL_SECRET")
+    line_user_id: Optional[str] = Field(None, env="LINE_USER_ID")
 
     class Config:
         case_sensitive = False

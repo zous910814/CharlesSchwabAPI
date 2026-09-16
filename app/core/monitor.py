@@ -409,6 +409,17 @@ async def _manage_position(client: SchwabClient, settings: Settings, symbol: str
     else:
         if (r if r is not None else -1) < 0:
             STATE["orb_day"]["consecutive_losses"] += 1
+            if STATE["orb_day"]["consecutive_losses"] == settings.schwab_orb_max_consecutive_losses:
+                await activity_log.log_event(
+                    event_type="daily_trading_halted",
+                    account_id=settings.schwab_account_id,
+                    symbol=symbol,
+                    status="consecutive_losses",
+                    detail={
+                        "consecutive_losses": STATE["orb_day"]["consecutive_losses"],
+                        "max_consecutive_losses": settings.schwab_orb_max_consecutive_losses,
+                    },
+                )
         else:
             STATE["orb_day"]["consecutive_losses"] = 0
         symbol_state["position"] = None

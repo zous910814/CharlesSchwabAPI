@@ -13,11 +13,13 @@ app/
   core/account.py         # Parses Schwab account responses: buying power, equity, positions, day P&L
   core/quotes.py          # Parses Schwab quotes responses: bid/ask, halt status
   core/deps.py            # Shared SchwabClient FastAPI dependency
+  core/line_notify.py     # LINE push notifications for risk events + webhook signature verification
   clients/schwab.py        # Schwab API client: token refresh, code exchange, orders, account, price history, quotes
   routers/accounts.py      # GET /accounts/login — starts the OAuth flow
   routers/auth.py          # GET /accounts/callback — exchanges code for tokens
   routers/orders.py        # POST /orders/{account_id} — places an order, logs every attempt/result
   routers/dashboard.py     # GET /dashboard, GET /api/activity, GET /api/monitor/status, GET /api/portfolio
+  routers/line_webhook.py  # POST /line/webhook — logs incoming LINE events (used once to find your user ID)
   schemas/order.py         # OrderRequest/OrderLeg pydantic models
   strategy/orb.py          # Pure-Python ORB indicators (OR, VWAP, ATR, RVOL, spread) + entry-rule evaluation
   strategy/kd.py           # Unused by the monitor now (kept in case you want a simpler strategy again)
@@ -56,6 +58,7 @@ Visiting the server's root URL (`/`) also redirects to `/accounts/login`.
 - `GET /api/monitor/status` — current monitor state (market open/closed, manual pause, circuit breaker, daily order-value ledger, last poll, per-symbol close/OR/VWAP/RVOL/spread/open position)
 - `POST /api/monitor/pause` / `POST /api/monitor/resume` — emergency stop: pause/resume all automated trading (BUY/SELL/stop-loss) without restarting the server
 - `GET /api/portfolio` — current buying power, account value, and held positions (qty, average cost, current price, market value, unrealized P&L) straight from Schwab's account endpoint
+- `POST /line/webhook` — receives LINE Messaging API events; see [LINE risk notifications](#line-risk-notifications)
 
 `OrderRequest` payload (example):
 ```json
@@ -150,6 +153,30 @@ The spec (`stock trading strategy.md` §7, §10-13) covers more than this pass d
 Per-symbol ORB day-state (opening range, entries-today count, open position, RVOL baseline cache), the stop-loss daily-fire flag, the manual pause, and the circuit breaker are all in-memory only and reset on restart (including `--reload`) — acceptable for a personal dev setup, worth hardening (persist to `activity_log.db`) before leaving it running unattended for long stretches.
 
 `extract_buying_power()` / `extract_equity()` (`app/core/account.py`) try several known Schwab balance field names in order; verified against a real margin account's response during development, but double-check against yours if it's a cash account (visible in `order_skipped`/`account_lookup_failed` detail on the dashboard).
+
+## LINE risk notifications
+`app/core/activity_log.py::log_event()` pushes a LINE message via `app/core/line_notify.py` whenever it logs one of these (`app/core/line_notify.py::is_risk_event`):
+- `stop_loss_triggered` — the blanket account-wide stop-loss fired
+- `orb_exit` with status `stop_hit` — ORB's own ATR-based stop fired
+- `circuit_breaker` (`tripped` or `reset`) — the daily loss limit paused/resumed trading
+- `daily_trading_halted` — consecutive losses hit `SCHWAB_ORB_MAX_CONSECUTIVE_LOSSES`, no more entries today
+- `monitor_error` — the monitor loop itself hit an error (account/quote/price-history lookup failed, etc.)
+- `order_result` with status `failed` or `error` — an order was rejected or errored, manual or automated
+
+It's a fire-and-forget background task (`asyncio.create_task`) so a slow or unreachable LINE API never adds latency to the trading loop, and delivery failures are only printed to the console — never re-logged through `log_event` itself, which would risk a retry loop if LINE is what's down. With `LINE_CHANNEL_ACCESS_TOKEN`/`LINE_USER_ID` unset (the default), `send_line_message` is a silent no-op — nothing breaks, you just don't get pushes yet.
+
+### Setup
+1. **Create a channel**: go to the [LINE Developers Console](https://developers.line.biz/console/), create a Provider if you don't have one, then create a new **Messaging API** channel under it.
+2. **Get the Channel Access Token**: open the channel → **Messaging API** tab → issue a long-lived channel access token. Put it in `.env` as `LINE_CHANNEL_ACCESS_TOKEN`.
+3. **Get the Channel Secret**: same channel → **Basic settings** tab → copy the Channel secret. Put it in `.env` as `LINE_CHANNEL_SECRET` (optional but recommended — without it, `/line/webhook` accepts requests without verifying they actually came from LINE).
+4. **Add the bot as a friend**: scan the QR code shown on the channel's Messaging API tab from your own LINE app.
+5. **Find your own User ID** (LINE doesn't show this anywhere in the console — you have to receive one webhook event to see it):
+   - Temporarily expose your local server publicly, e.g. `ngrok http https://127.0.0.1:8000` (or any tunnel tool you prefer) — LINE's servers need to reach the webhook over the internet, `127.0.0.1` won't work directly.
+   - In the channel's **Messaging API** tab, set the Webhook URL to `https://<your-tunnel-domain>/line/webhook` and enable "Use webhook".
+   - Send the bot any message from your LINE app.
+   - Check `GET /api/activity?event_type=line_webhook` (or the dashboard, filtered to that event type) — the logged detail's `source.userId` is your `LINE_USER_ID`. Copy it into `.env`.
+   - You can turn the tunnel off after this — outbound risk notifications use the Push Message API and don't need a live webhook at all; the webhook is purely a one-time way to discover your own ID (or leave it running if you might want two-way bot commands later).
+6. Restart the server (`python run.py`) so the new `.env` values load, then trigger any risk event (or just wait for one) to confirm a message arrives.
 
 ## Notes
 - `SCHWAB_BASE_URL` defaults to `https://api.schwabapi.com`; swap to the sandbox base if provided by Schwab.

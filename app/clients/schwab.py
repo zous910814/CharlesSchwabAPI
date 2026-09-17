@@ -165,6 +165,22 @@ class SchwabClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_movers(self, symbol_id: str, *, sort: str = "VOLUME", frequency: int = 0) -> dict:
+        """Today's top movers for an index (symbol_id e.g. '$DJI', '$COMPX', '$SPX').
+        sort: VOLUME | TRADES | PERCENT_CHANGE_UP | PERCENT_CHANGE_DOWN.
+        frequency: 0 (all day) | 1 | 5 | 10 | 30 | 60 (minutes)."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"sort": sort, "frequency": frequency}
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/marketdata/v1/movers/{symbol_id}",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_quotes(self, symbols: list[str]) -> dict:
         """Real-time quotes (bid/ask/last) for one or more symbols, keyed by symbol."""
         token = await self._ensure_token()

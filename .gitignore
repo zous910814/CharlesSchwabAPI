@@ -33,3 +33,6 @@ activity_log.db-shm
 scripts/
 
 VPS_OPERATIONS.md
+
+# Personal reference notebooks, not part of the app
+jpx-regression.ipynb

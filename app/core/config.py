@@ -59,6 +59,24 @@ class Settings(BaseSettings):
     line_channel_secret: Optional[str] = Field(None, env="LINE_CHANNEL_SECRET")
     line_user_id: Optional[str] = Field(None, env="LINE_USER_ID")
 
+    # Daily price-history pipeline (app/core/data_pipeline.py + price_history_db.py):
+    # movers-based candidate universe -> daily OHLCV backfill into Postgres.
+    # Optional — pipeline no-ops (logs + skips) if PG_DSN is unset, so a missing
+    # Postgres config never crashes the rest of the app.
+    pg_dsn: Optional[str] = Field(None, env="PG_DSN")
+    price_history_movers_indices: str = Field("$DJI,$COMPX,$SPX", env="PRICE_HISTORY_MOVERS_INDICES")
+    price_history_movers_sort: str = Field("VOLUME", env="PRICE_HISTORY_MOVERS_SORT")
+    price_history_movers_frequency: int = Field(0, env="PRICE_HISTORY_MOVERS_FREQUENCY")
+    price_history_backfill_days: int = Field(60, env="PRICE_HISTORY_BACKFILL_DAYS")
+    # Fixed training-data universe (in addition to the movers-based daily
+    # candidates above) — a flat JSON array of symbols, kept up to date by hand
+    # like watchlist.json. Backfilled every run alongside the movers universe
+    # so historical coverage stays consistent day to day for model training.
+    price_history_universe_path: str = Field("sp500_constituents.json", env="PRICE_HISTORY_UNIVERSE_PATH")
+    # "HH:MM" 24h, America/New_York (see app/strategy/orb.py MARKET_TZ) — run
+    # shortly after 4:00pm ET close so the day's final daily bar is settled.
+    price_history_run_time_et: str = Field("16:30", env="PRICE_HISTORY_RUN_TIME_ET")
+
     class Config:
         case_sensitive = False
 

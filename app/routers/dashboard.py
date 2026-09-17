@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 import httpx
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, monitor
+from app.core import activity_log, data_pipeline, monitor
 from app.core.account import extract_buying_power, extract_equity, parse_positions
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
@@ -54,6 +54,16 @@ async def monitor_resume(settings: Settings = Depends(get_settings)) -> dict:
         event_type="monitor_control", account_id=settings.schwab_account_id, status="resumed"
     )
     return {"manual_pause": False}
+
+
+@router.post("/api/price-history/run-now")
+async def price_history_run_now() -> dict:
+    return await data_pipeline.run_once()
+
+
+@router.get("/api/price-history/status")
+async def price_history_status() -> dict:
+    return data_pipeline.STATE
 
 
 @router.get("/api/portfolio")

@@ -9,6 +9,7 @@ __pycache__/
 # Env & secrets
 .env
 .env.local
+.env.vps
 .schwab_tokens.json
 *.pem
 
@@ -31,5 +32,4 @@ activity_log.db-shm
 # Scripts directory
 scripts/
 
-# Local launcher
-start.bat
+VPS_OPERATIONS.md

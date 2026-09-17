@@ -1,4 +1,5 @@
 ﻿import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,13 @@ async def oauth_callback(
                         new_lines.append(f"SCHWAB_REFRESH_TOKEN={refresh_token}")
                     env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
                     print(".env 已自動更新 SCHWAB_REFRESH_TOKEN")
+
+                # Also apply it to the running process immediately — otherwise
+                # get_settings()'s cached Settings (and the monitor loop, which
+                # holds its own reference) would keep using the old token until
+                # a manual restart, even though the file on disk is current.
+                os.environ["SCHWAB_REFRESH_TOKEN"] = refresh_token
+                get_settings.cache_clear()
         except Exception as env_exc:  # pragma: no cover - best-effort persistence
             print("更新 .env 失敗：", env_exc)
 

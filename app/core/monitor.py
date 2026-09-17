@@ -660,10 +660,14 @@ async def _poll_once(settings: Settings) -> None:
 
 
 async def run_forever() -> None:
-    settings = get_settings()
     STATE["running"] = True
     try:
         while True:
+            # Re-fetched every iteration (cheap: get_settings() is cached and
+            # only rebuilds after auth.py's callback clears the cache on a
+            # fresh login) so a renewed refresh_token takes effect on the next
+            # poll instead of requiring a process restart.
+            settings = get_settings()
             try:
                 await _poll_once(settings)
                 STATE["last_error"] = None

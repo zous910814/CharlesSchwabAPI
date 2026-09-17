@@ -73,9 +73,11 @@ class Settings(BaseSettings):
     # like watchlist.json. Backfilled every run alongside the movers universe
     # so historical coverage stays consistent day to day for model training.
     price_history_universe_path: str = Field("sp500_constituents.json", env="PRICE_HISTORY_UNIVERSE_PATH")
-    # "HH:MM" 24h, America/New_York (see app/strategy/orb.py MARKET_TZ) — run
-    # shortly after 4:00pm ET close so the day's final daily bar is settled.
-    price_history_run_time_et: str = Field("16:30", env="PRICE_HISTORY_RUN_TIME_ET")
+    # "HH:MM" 24h, America/New_York (see app/strategy/orb.py MARKET_TZ). Default
+    # is 5 hours before the 9:30am ET open, so the previous day's (already
+    # settled) bar is loaded and a future regression/watchlist step has time
+    # to run before trading starts.
+    price_history_run_time_et: str = Field("04:30", env="PRICE_HISTORY_RUN_TIME_ET")
 
     class Config:
         case_sensitive = False

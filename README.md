@@ -25,7 +25,9 @@ app/
   strategy/kd.py           # Unused by the monitor now (kept in case you want a simpler strategy again)
   templates/dashboard.html # Dashboard page (vanilla HTML/JS, polls the API endpoints above)
 watchlist.json           # Symbols the monitor loop evaluates every poll cycle
-stock trading strategy.md # The ORB spec this implementation follows — see it for full rationale/detail
+docs/stock trading strategy.md # The ORB spec this implementation follows — see it for full rationale/detail
+docs/VPS_OPERATIONS.md   # VPS deployment/ops runbook (gitignored, local reference only)
+docs/BACKTEST_REPORT.md  # Watchlist regression + ORB backtest findings
 requirements.txt
 .env
 cert.pem / key.pem      # local TLS certs for the HTTPS redirect URI
@@ -89,7 +91,7 @@ Every call — dry-run or live — writes an `order_submitted` event and an `ord
 Both auto-refresh every 5s. Data comes from `activity_log.db` (SQLite, created automatically on startup) via `app/core/activity_log.py`; there's nothing else to configure.
 
 ## Live monitor & the ORB strategy
-`app/core/monitor.py` runs as a background task for the life of the server (started/stopped in `app/main.py`'s lifespan), implementing the Opening Range Breakout strategy specified in **`stock trading strategy.md`** — read that file for the full rationale; this section covers what's actually implemented and how it maps to config.
+`app/core/monitor.py` runs as a background task for the life of the server (started/stopped in `app/main.py`'s lifespan), implementing the Opening Range Breakout strategy specified in **`docs/stock trading strategy.md`** — read that file for the full rationale; this section covers what's actually implemented and how it maps to config.
 
 Every `MONITOR_POLL_SECONDS` (default 60) while the market is open (Mon-Fri 09:30-16:00 America/New_York — **does not account for market holidays**):
 1. Reads symbols from `watchlist.json` (`WATCHLIST_PATH` to change the file); SPY and QQQ are always evaluated too (even if not listed) since they're the market-direction reference for every other symbol.
@@ -131,7 +133,7 @@ Before every exit sell, the quantity is clamped to whatever Schwab actually repo
 Orders that clear all checks go through the same `submit_order()` path as the manual `/orders` endpoint — so they respect `SCHWAB_DRY_RUN` identically (dry-run sends to Schwab's `previewOrder`, live sends a real order) and log identically, tagged `"source": "orb_entry"` / `"orb_<exit_reason>"` / `"stop_loss"` vs `"manual"` in the detail JSON.
 
 ### What's not implemented
-The spec (`stock trading strategy.md` §7, §10-13) covers more than this pass does — treat these as known gaps, not bugs:
+The spec (`docs/stock trading strategy.md` §7, §10-13) covers more than this pass does — treat these as known gaps, not bugs:
 - **Short-selling (§7)** — long-only for now; the spec itself suggests this fallback when reliable short-locate data isn't available, which it isn't here.
 - **Correlated-position grouping (§9.4)** — simplified to two static groups (Nasdaq-linked vs. SPY/broad-market) capped at one open position per group, not a real correlation calculation.
 - **Halt/anomaly detection (§10)** — best-effort via the quote's `securityStatus` field; no earnings/event calendar exclusion.

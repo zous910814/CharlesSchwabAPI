@@ -57,6 +57,28 @@ def format_risk_message(
     return "\n".join(lines)
 
 
+def format_daily_watchlist_message(result: dict) -> str:
+    now = datetime.now(LA_TZ).strftime("%Y-%m-%d %H:%M:%S PT")
+    lines = [f"[Daily Watchlist] {now}"]
+
+    failed = result.get("symbols_failed") or []
+    lines.append(
+        f"Backfill: {result.get('symbols_ok', 0)}/{result.get('combined_universe_size', 0)} symbols ok"
+        + (f", {len(failed)} failed" if failed else "")
+        + f", {result.get('rows_upserted', 0)} rows upserted"
+    )
+
+    watchlist = result.get("watchlist") or {}
+    if watchlist.get("symbols"):
+        lines.append(f"Watchlist ({watchlist['count']}): " + ", ".join(watchlist["symbols"]))
+    elif watchlist.get("skipped"):
+        lines.append(f"Watchlist: skipped ({watchlist['skipped']})")
+    elif watchlist.get("error"):
+        lines.append(f"Watchlist: error ({watchlist['error'][:200]})")
+
+    return "\n".join(lines)
+
+
 async def send_line_message(settings: Settings, text: str) -> None:
     if not settings.line_channel_access_token or not settings.line_user_id:
         return  # not configured yet — silent no-op, never blocks the caller

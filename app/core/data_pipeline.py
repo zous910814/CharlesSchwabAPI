@@ -12,6 +12,7 @@ from app.clients.schwab import SchwabClient
 from app.core import activity_log, price_history_db, watchlist_model
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
+from app.core.line_notify import format_daily_watchlist_message, send_line_message
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -122,6 +123,7 @@ async def run_once(settings: Optional[Settings] = None) -> dict:
         last_result=result,
     )
     await activity_log.log_event(event_type="price_history_run", status="ok", detail=result)
+    await send_line_message(settings, format_daily_watchlist_message(result))
     return result
 
 

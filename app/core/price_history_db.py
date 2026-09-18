@@ -85,6 +85,19 @@ async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+async def fetch_all_daily_bars() -> list[dict]:
+    """Every symbol's full daily-bar history, oldest first per symbol — the
+    training set for app.core.watchlist_model's regression."""
+    if _pool is None:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT symbol, trade_date, open, high, low, close, volume "
+            "FROM price_history ORDER BY symbol, trade_date"
+        )
+    return [dict(r) for r in rows]
+
+
 async def upsert_daily_bars(symbol: str, candles: list[dict], *, source: str = "schwab") -> int:
     if _pool is None or not candles:
         return 0

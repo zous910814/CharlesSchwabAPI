@@ -34,5 +34,9 @@ scripts/
 
 VPS_OPERATIONS.md
 
+# Generated daily by app/core/watchlist_model.py; a tracked copy would get
+# clobbered by deploy.sh's `git reset --hard` every 5 minutes.
+watchlist.json
+
 # Personal reference notebooks, not part of the app
 jpx-regression.ipynb

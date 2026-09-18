@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     # to run before trading starts.
     price_history_run_time_et: str = Field("04:30", env="PRICE_HISTORY_RUN_TIME_ET")
 
+    # Daily watchlist regression (app/core/watchlist_model.py). Runs right after
+    # the price-history backfill above (same job, same 04:30 ET slot) so
+    # watchlist.json is refreshed well before the 09:30 ET open. Disabling this
+    # leaves watchlist.json exactly as it was last written (manually or by a
+    # previous run) — the backfill itself is unaffected either way.
+    watchlist_auto_update: bool = Field(True, env="WATCHLIST_AUTO_UPDATE")
+    watchlist_top_n: int = Field(15, env="WATCHLIST_TOP_N")
+    watchlist_min_price: float = Field(5.0, env="WATCHLIST_MIN_PRICE")
+
     class Config:
         case_sensitive = False
 

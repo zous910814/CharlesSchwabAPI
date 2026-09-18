@@ -6,3 +6,6 @@ pydantic
 pydantic-settings
 aiosqlite
 asyncpg
+pandas
+numpy
+scikit-learn

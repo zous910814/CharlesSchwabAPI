@@ -9,7 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, price_history_db
+from app.core import activity_log, price_history_db, watchlist_model
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
 
@@ -113,6 +113,8 @@ async def run_once(settings: Optional[Settings] = None) -> dict:
                 )
     finally:
         await client.aclose()
+
+    result["watchlist"] = await watchlist_model.generate_and_write(settings)
 
     STATE.update(
         last_run_date=datetime.now(MARKET_TZ).date().isoformat(),

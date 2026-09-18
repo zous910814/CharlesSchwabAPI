@@ -67,6 +67,24 @@ def is_ready() -> bool:
     return _pool is not None
 
 
+async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
+    """Most recent completed daily bars for `symbol` (strictly before today,
+    so a not-yet-finalized "today" row is never included), oldest first —
+    ready to feed straight into app.strategy.orb.compute_atr, which expects
+    that ordering and just needs high/low/close per bar."""
+    if _pool is None:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT high, low, close FROM price_history "
+            "WHERE symbol = $1 AND trade_date < CURRENT_DATE "
+            "ORDER BY trade_date DESC LIMIT $2",
+            symbol,
+            limit,
+        )
+    return [dict(r) for r in reversed(rows)]
+
+
 async def upsert_daily_bars(symbol: str, candles: list[dict], *, source: str = "schwab") -> int:
     if _pool is None or not candles:
         return 0

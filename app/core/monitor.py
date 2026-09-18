@@ -9,7 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log
+from app.core import activity_log, price_history_db
 from app.core.account import (
     extract_buying_power,
     extract_day_pl,
@@ -292,6 +292,26 @@ async def _compute_symbol_indicators(client: SchwabClient, symbol: str, now: dat
             )
         symbol_state["rvol_baseline_date"] = today
 
+    # Daily ATR(14) from price_history's daily bars, not a same-day 1-minute
+    # ATR: the opening-range-width check (or_width_ok) compares a 5-minute
+    # price range against this ATR, so it needs to be on the same "normal
+    # daily volatility" scale as that range, not a tiny few-minutes-of-noise
+    # figure. Cached per symbol per day (a daily-scale number doesn't change
+    # intraday); None if price_history isn't configured/reachable or the
+    # symbol has no history yet — evaluate_long_entry already fails closed
+    # (no trade) on a missing ATR, it never falls back to the old minute ATR.
+    if symbol_state.get("daily_atr_date") != today:
+        try:
+            daily_bars = await price_history_db.get_recent_daily_bars(symbol)
+            symbol_state["daily_atr"] = orb.compute_atr(daily_bars, period=14) if daily_bars else None
+        except Exception as exc:  # noqa: BLE001
+            symbol_state["daily_atr"] = None
+            await activity_log.log_event(
+                event_type="monitor_error", symbol=symbol, status="error",
+                detail={"phase": "daily_atr"}, error=str(exc),
+            )
+        symbol_state["daily_atr_date"] = today
+
     history = await client.get_price_history(
         symbol,
         periodType="day",
@@ -314,7 +334,7 @@ async def _compute_symbol_indicators(client: SchwabClient, symbol: str, now: dat
     symbol_state["or_high"] = or_range[0] if or_range else None
     symbol_state["or_low"] = or_range[1] if or_range else None
     symbol_state["vwap"] = orb.compute_vwap(candles)
-    symbol_state["atr"] = orb.compute_atr(candles, period=14)
+    symbol_state["atr"] = symbol_state.get("daily_atr")
     symbol_state["rvol"] = rvol
     symbol_state["checked_at"] = now.isoformat()
 

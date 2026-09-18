@@ -87,8 +87,15 @@ def score_latest(df: pd.DataFrame, *, min_close_price: float, top_n: int) -> lis
     model.fit(train[FEATURE_COLUMNS], train["target"])
     latest["predicted_range_atr"] = model.predict(latest[FEATURE_COLUMNS])
 
+    # Keep nlargest's descending-by-score order (not alphabetical): monitor.py
+    # walks watchlist.json in file order and uses that order as an implicit
+    # priority whenever two symbols compete for a shared resource — the daily
+    # BUY budget (_reserve_daily_order_value) or a correlation-group slot
+    # (only one open position per correlated group at a time). Alphabetizing
+    # here would silently hand that priority to whichever symbol's ticker
+    # happens to start with an earlier letter, regardless of model score.
     top = latest.nlargest(top_n, "predicted_range_atr")
-    return sorted(top["symbol"].tolist())
+    return top["symbol"].tolist()
 
 
 def write_watchlist(settings: Settings, symbols: list[str]) -> None:

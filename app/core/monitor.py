@@ -616,12 +616,21 @@ async def _poll_once(settings: Settings) -> None:
             await _update_circuit_breaker(settings, account_snapshot)
             await _run_stop_losses(client, settings, account_snapshot)
 
-        if not watchlist:
+        # A symbol can hold an open ORB position from a previous day's
+        # watchlist even after today's (e.g. auto-regenerated) watchlist drops
+        # it — it must keep being tracked/managed (stops, targets, EOD
+        # flatten) until that position is closed, regardless of whether it's
+        # still on the current watchlist. Only NEW entries are gated by the
+        # watchlist itself.
+        held_symbols = [sym for sym, s in STATE["symbols"].items() if s.get("position")]
+        managed_symbols = list(dict.fromkeys(watchlist + held_symbols))
+
+        if not managed_symbols:
             return
 
         # SPY/QQQ are always evaluated too (even if not on the watchlist) since
         # every other symbol's market-direction filter references one of them.
-        symbols_to_process = list(dict.fromkeys(watchlist + ["SPY", "QQQ"]))
+        symbols_to_process = list(dict.fromkeys(managed_symbols + ["SPY", "QQQ"]))
         for symbol in symbols_to_process:
             try:
                 await _compute_symbol_indicators(client, symbol, now)
@@ -629,7 +638,7 @@ async def _poll_once(settings: Settings) -> None:
                 await activity_log.log_event(event_type="signal_check", symbol=symbol, status="error", error=str(exc))
 
         if account_snapshot is not None:
-            for symbol in watchlist:
+            for symbol in managed_symbols:
                 try:
                     await _manage_position(client, settings, symbol, now, account_snapshot)
                 except Exception as exc:  # noqa: BLE001
@@ -638,7 +647,7 @@ async def _poll_once(settings: Settings) -> None:
                         detail={"phase": "manage_position"}, error=str(exc),
                     )
 
-            if orb.is_entry_window(now):
+            if watchlist and orb.is_entry_window(now):
                 try:
                     quotes = await client.get_quotes(watchlist)
                 except Exception as exc:  # noqa: BLE001

@@ -206,6 +206,73 @@ async def _run_stop_losses(client: SchwabClient, settings: Settings, account: di
             pass  # already logged inside submit_order
 
 
+async def _reconcile_untracked_positions(settings: Settings, account: dict) -> None:
+    """After a process restart, STATE (and every symbol's position tracking)
+    starts empty even though real shares may still be held at Schwab. Broker
+    account data can recover quantity and average cost, but never the
+    ATR-based stop, entry_time, or half-closed flag — those are ORB-internal
+    decisions made once at entry time and only ever kept in this process's
+    memory. Rather than leaving such a position invisible to _manage_position
+    until it hits the blanket 10% stop-loss, rebuild a conservative tracking
+    entry for it: real qty/entry_price from the account, a fresh ATR-based
+    stop anchored on entry_price (not current price — anchoring on current
+    price can push stop_price above entry_price if the trade ran up while the
+    process was down, which makes r_multiple's entry_price - stop_price
+    denominator <= 0 and permanently disables the target1/target2 checks;
+    anchoring on entry_price also means a position that already fell past its
+    real risk budget while untracked gets stopped out on the very next poll
+    instead of being handed a new, looser stop from wherever it now sits).
+    entry_time reset to now (only delays time_stop, never skips the tighter
+    stop/target checks); half_closed defaulted to False (worst case target1
+    fires again on the already-remaining shares, which is harmless)."""
+    for pos in parse_positions(account):
+        symbol = pos["symbol"]
+        quantity = pos["quantity"]
+        if quantity <= 0:
+            continue
+
+        symbol_state = STATE["symbols"].setdefault(symbol, {})
+        if symbol_state.get("position"):
+            continue  # already tracked; normal case, no restart happened
+
+        entry_price = pos.get("average_price") or pos.get("current_price")
+        current_price = pos.get("current_price")
+        if entry_price is None or current_price is None:
+            continue
+
+        daily_atr = symbol_state.get("daily_atr")
+        if daily_atr is None:
+            try:
+                daily_bars = await price_history_db.get_recent_daily_bars(symbol)
+                daily_atr = orb.compute_atr(daily_bars, period=14) if daily_bars else None
+            except Exception:  # noqa: BLE001
+                daily_atr = None
+
+        if daily_atr and daily_atr > 0:
+            stop_price = orb.compute_stop_price(entry_price, entry_price, daily_atr, settings.schwab_orb_stop_atr_mult)
+        else:
+            stop_price = entry_price * (1 - settings.schwab_stop_loss_pct)
+
+        symbol_state["position"] = {
+            "entry_price": entry_price,
+            "stop_price": stop_price,
+            "initial_stop_price": stop_price,
+            "shares": quantity,
+            "initial_shares": quantity,
+            "half_closed": False,
+            "entry_time": datetime.now(MARKET_TZ).isoformat(),
+            "r_multiple": 0.0,
+            "reconstructed": True,
+        }
+        await activity_log.log_event(
+            event_type="position_reconciled",
+            account_id=settings.schwab_account_id,
+            symbol=symbol,
+            status="reconstructed",
+            detail={"quantity": quantity, "entry_price": entry_price, "stop_price": stop_price},
+        )
+
+
 def _daily_order_value_remaining(settings: Settings, buying_power: float, account_value: float) -> float:
     """Remaining BUY budget for today: never more than the account's actual
     buying power, minus BUY orders submitted today whose effect on that
@@ -635,6 +702,7 @@ async def _poll_once(settings: Settings) -> None:
         if account_snapshot is not None:
             await _update_circuit_breaker(settings, account_snapshot)
             await _run_stop_losses(client, settings, account_snapshot)
+            await _reconcile_untracked_positions(settings, account_snapshot)
 
         # A symbol can hold an open ORB position from a previous day's
         # watchlist even after today's (e.g. auto-regenerated) watchlist drops

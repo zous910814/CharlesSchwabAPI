@@ -39,4 +39,4 @@ VPS_OPERATIONS.md
 watchlist.json
 
 # Personal reference notebooks, not part of the app
-jpx-regression.ipynb
+docs/jpx-regression.ipynb

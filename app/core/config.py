@@ -52,10 +52,20 @@ class Settings(BaseSettings):
     schwab_orb_time_stop_r: float = Field(0.5, env="SCHWAB_ORB_TIME_STOP_R")
     schwab_orb_target1_r: float = Field(1.0, env="SCHWAB_ORB_TARGET1_R")
     schwab_orb_target2_r: float = Field(1.5, env="SCHWAB_ORB_TARGET2_R")
-    # Pauses NEW ORB entries only — stop-losses, targets, EOD flatten, and the
-    # circuit breaker keep running for any already-open position. Set false
-    # while testing KD (app/core/kd_watchlist.py) on the same small account so
-    # the two strategies never compete for the same buying power.
+    # Master switch: false skips ALL ORB position management (reconciling
+    # untracked positions, stop/target/back-in-range exits, indicators) and
+    # entries — the poll loop only runs the circuit breaker and the blanket
+    # account-wide stop-loss. Needed because _reconcile_untracked_positions
+    # adopts *any* position it doesn't already know about (e.g. one KD just
+    # bought) into ORB's own exit rules, which are meant for intraday
+    # breakout trades, not multi-day swing positions. KD protects its own
+    # entries with a real broker-side stop order, so it has no dependency on
+    # this loop and is unaffected by turning ORB off entirely.
+    schwab_orb_enabled: bool = Field(True, env="SCHWAB_ORB_ENABLED")
+    # Pauses NEW ORB entries only (finer-grained than schwab_orb_enabled) —
+    # stop-losses, targets, EOD flatten, and the circuit breaker keep running
+    # for any already-open ORB position. Ignored when schwab_orb_enabled is
+    # false.
     schwab_orb_entries_enabled: bool = Field(True, env="SCHWAB_ORB_ENTRIES_ENABLED")
 
     # LINE risk notifications (app/core/line_notify.py). All optional — unset

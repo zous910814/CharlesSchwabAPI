@@ -56,7 +56,9 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -67,9 +69,10 @@ from app.core import activity_log, price_history_db
 from app.core.account import extract_buying_power, extract_position_qty, parse_positions
 from app.core.config import Settings
 from app.core.order_executor import submit_order
-from app.strategy.kd import compute_kd
+from app.strategy.kd import compute_kd, kd_signal
 
 logger = logging.getLogger(__name__)
+MARKET_TZ = ZoneInfo("America/New_York")
 
 K_PERIOD = 14
 D_PERIOD = 5
@@ -207,6 +210,115 @@ def train_cross_predictor(df: pd.DataFrame) -> Optional[LogisticRegression]:
     return model
 
 
+async def _exit_kd_position(
+    settings: Settings, client: SchwabClient, account: dict, position: dict, reason: str, trade_date: str,
+) -> dict:
+    """Cancels the resting broker-side stop (if any) and market-sells the
+    full held quantity. Shared by recommend_action's once-daily SELL branch
+    and check_intraday_exit's faster same-day check, so both exit paths stay
+    in sync instead of drifting apart."""
+    symbol = position["symbol"]
+    shares = extract_position_qty(account, symbol)
+    result = {"action": "SELL", "symbol": symbol, "reason": reason, "shares": shares, "trade_date": trade_date}
+
+    # Cancel the resting broker-side stop before market-selling - otherwise a
+    # stale SELL STOP for shares we no longer hold stays working. If reason
+    # is stop_hit, that order may have already filled/vanished on its own;
+    # cancelling a nonexistent order just fails harmlessly here.
+    stop_order_id = position.get("stop_order_id")
+    if stop_order_id:
+        try:
+            await client.cancel_order(settings.schwab_account_id, stop_order_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("kd_watchlist: stop-order cancel for %s (%s) did not succeed: %s",
+                        symbol, stop_order_id, exc)
+
+    if shares > 0:
+        order_body = _market_order(symbol, "SELL", shares)
+        try:
+            result["order"] = await submit_order(
+                client=client, settings=settings, account_id=settings.schwab_account_id,
+                order_body=order_body, source="kd_watchlist",
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["order_error"] = str(exc)
+
+    await activity_log.log_event(
+        event_type="kd_exit", symbol=symbol, status="signal",
+        detail={"reason": reason, "trade_date": trade_date},
+    )
+    return result
+
+
+async def check_intraday_exit(settings: Settings, client: SchwabClient) -> Optional[dict]:
+    """Same death-cross/ATR-stop exit check recommend_action does once a day
+    off last night's finalized close, but run from monitor.py's ~60s poll
+    loop off TODAY'S still-forming daily bar instead — so a death cross (or
+    a low piercing the stop) gets acted on within a minute or so of
+    happening, not up to a day later when the once-daily job next runs.
+
+    Today's bar is built from the day's 1-minute candles so far (open/high/
+    low/close as they stand right now), appended after price_history_db's
+    already-finalized prior bars, then run through the exact same
+    compute_kd/kd_signal used everywhere else. Because that bar keeps
+    changing every poll until the real close prints, the death-cross state
+    can flicker in and out intraday before settling - this trades a bit of
+    whipsaw risk for reacting same-day instead of next-day; the once-daily
+    recommend_action check still runs too and is authoritative on the
+    finalized bar.
+    """
+    if not price_history_db.is_ready():
+        return None
+    position = await _current_kd_position()
+    if position is None:
+        return None
+    symbol = position["symbol"]
+
+    try:
+        account = await client.get_account(settings.schwab_account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("kd_watchlist intraday check: account fetch failed: %s", exc)
+        return None
+    if symbol not in {p["symbol"] for p in parse_positions(account)}:
+        return None
+
+    daily_bars = await price_history_db.get_recent_daily_bars(symbol, limit=K_PERIOD + D_PERIOD + 10)
+    if len(daily_bars) < K_PERIOD:
+        return None
+
+    try:
+        history = await client.get_price_history(
+            symbol, periodType="day", period=1, frequencyType="minute", frequency=1,
+            needExtendedHoursData=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("kd_watchlist intraday check: price history fetch failed for %s: %s", symbol, exc)
+        return None
+    candles = history.get("candles") or []
+    if not candles:
+        return None
+
+    today_bar = {
+        "high": max(c["high"] for c in candles),
+        "low": min(c["low"] for c in candles),
+        "close": candles[-1]["close"],
+    }
+    combined = [*daily_bars, today_bar]
+    compute_kd(combined, k_period=K_PERIOD, d_period=D_PERIOD)
+    is_death_cross = kd_signal(combined, oversold=OVERSOLD, overbought=OVERBOUGHT) == "SELL"
+
+    stop_price = position.get("stop_price")
+    stop_hit = stop_price is not None and today_bar["low"] <= stop_price
+    if not (is_death_cross or stop_hit):
+        return None
+
+    reason = "stop_hit" if stop_hit else "death_cross"
+    trade_date = datetime.now(MARKET_TZ).date().isoformat()
+    result = await _exit_kd_position(settings, client, account, position, reason, trade_date)
+    result["intraday"] = True
+    return result
+
+
 async def _current_kd_position() -> Optional[dict]:
     """Most recent kd_entry event, unless a later kd_exit already closed it."""
     entries = await activity_log.fetch_events(event_type="kd_entry", limit=1)
@@ -268,37 +380,7 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
             stop_hit = stop_price is not None and row["low"] <= stop_price
             if bool(row["death_cross"]) or stop_hit:
                 reason = "stop_hit" if stop_hit else "death_cross"
-                shares = extract_position_qty(account, symbol)
-                result = {"action": "SELL", "symbol": symbol, "reason": reason, "shares": shares,
-                          "trade_date": str(latest_date)}
-
-                # Cancel the resting broker-side stop before market-selling -
-                # otherwise a stale SELL STOP for shares we no longer hold
-                # stays working. If reason is stop_hit, that order may have
-                # already filled/vanished on its own; cancelling a
-                # nonexistent order just fails harmlessly here.
-                stop_order_id = position.get("stop_order_id")
-                if stop_order_id:
-                    try:
-                        await client.cancel_order(settings.schwab_account_id, stop_order_id)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info("kd_watchlist: stop-order cancel for %s (%s) did not succeed: %s",
-                                    symbol, stop_order_id, exc)
-
-                if shares > 0:
-                    order_body = _market_order(symbol, "SELL", shares)
-                    try:
-                        result["order"] = await submit_order(
-                            client=client, settings=settings, account_id=settings.schwab_account_id,
-                            order_body=order_body, source="kd_watchlist",
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        result["order_error"] = str(exc)
-                await activity_log.log_event(
-                    event_type="kd_exit", symbol=symbol, status="signal",
-                    detail={"reason": reason, "trade_date": str(latest_date)},
-                )
-                return result
+                return await _exit_kd_position(settings, client, account, position, reason, str(latest_date))
         return {"action": "HOLD", "symbol": symbol, "trade_date": str(latest_date)}
 
     candidates = today_rows[today_rows["golden_cross"] & (today_rows["close"] >= MIN_CLOSE_PRICE)]

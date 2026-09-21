@@ -9,7 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, price_history_db
+from app.core import activity_log, kd_watchlist, price_history_db
 from app.core.account import (
     extract_buying_power,
     extract_day_pl,
@@ -702,6 +702,25 @@ async def _poll_once(settings: Settings) -> None:
         if account_snapshot is not None:
             await _update_circuit_breaker(settings, account_snapshot)
             await _run_stop_losses(client, settings, account_snapshot)
+
+        if settings.kd_watchlist_enabled and price_history_db.is_ready():
+            try:
+                kd_exit = await kd_watchlist.check_intraday_exit(settings, client)
+                if kd_exit is not None:
+                    await activity_log.log_event(
+                        event_type="kd_intraday_exit", account_id=settings.schwab_account_id,
+                        symbol=kd_exit.get("symbol"), status=kd_exit.get("reason"), detail=kd_exit,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await activity_log.log_event(
+                    event_type="monitor_error", status="error",
+                    detail={"phase": "kd_intraday_exit"}, error=str(exc),
+                )
+
+        if not settings.schwab_orb_enabled:
+            return
+
+        if account_snapshot is not None:
             await _reconcile_untracked_positions(settings, account_snapshot)
 
         # A symbol can hold an open ORB position from a previous day's

@@ -118,6 +118,14 @@
   }
   .empty { text-align: center; padding: 40px; color: var(--muted); }
   .ts { white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab-btn {
+    padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .tab-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
+  .pnl-total { font-size: 13px; color: var(--muted); margin-left: auto; }
+  .pnl-total strong { font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -125,6 +133,37 @@
   <h1>Schwab Trading Activity</h1>
   <p class="sub">Portfolio, live K/D signal monitor, and every order attempt/result. Auto-refreshes every 5s.</p>
 
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-dashboard" type="button">Dashboard</button>
+    <button class="tab-btn" id="tab-pnl" type="button">Monthly P&amp;L</button>
+  </div>
+
+  <div id="page-pnl" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title" style="margin:0">Realized P&amp;L by Month</span>
+        <select id="pnl-months">
+          <option value="6">Last 6 months</option>
+          <option value="12" selected>Last 12 months</option>
+          <option value="24">Last 24 months</option>
+        </select>
+        <span class="pnl-total">Total realized: <strong id="pnl-total">—</strong></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Realized P&amp;L</th>
+            <th>Closed trades</th>
+          </tr>
+        </thead>
+        <tbody id="pnl-rows"></tbody>
+      </table>
+      <div id="pnl-empty" class="empty" hidden>No closed trades in this window yet.</div>
+    </div>
+  </div>
+
+  <div id="page-dashboard">
   <div class="grid-2col">
     <div class="panel">
       <div class="panel-head">
@@ -218,6 +257,7 @@
     <tbody id="rows"></tbody>
   </table>
   <div id="empty" class="empty" hidden>No activity yet — orders placed through the API will show up here.</div>
+  </div>
 </div>
 
 <script>
@@ -383,6 +423,61 @@
   loadMonitor();
   loadPortfolio();
   scheduleAutoRefresh();
+
+  // --- Tabs: Dashboard <-> Monthly P&L ---
+  const tabDashboard = document.getElementById('tab-dashboard');
+  const tabPnl = document.getElementById('tab-pnl');
+  const pageDashboard = document.getElementById('page-dashboard');
+  const pagePnl = document.getElementById('page-pnl');
+  const pnlMonths = document.getElementById('pnl-months');
+  const pnlRows = document.getElementById('pnl-rows');
+  const pnlEmpty = document.getElementById('pnl-empty');
+  const pnlTotal = document.getElementById('pnl-total');
+  let pnlLoaded = false;
+
+  function showTab(name) {
+    const onPnl = name === 'pnl';
+    pageDashboard.hidden = onPnl;
+    pagePnl.hidden = !onPnl;
+    tabDashboard.classList.toggle('active', !onPnl);
+    tabPnl.classList.toggle('active', onPnl);
+    if (onPnl && !pnlLoaded) loadPnl();
+  }
+  tabDashboard.addEventListener('click', () => showTab('dashboard'));
+  tabPnl.addEventListener('click', () => showTab('pnl'));
+
+  function renderPnlRow(m) {
+    const plClass = m.realized_pnl >= 0 ? 'pl-pos' : 'pl-neg';
+    return `<tr>
+      <td>${esc(m.month)}</td>
+      <td class="mono ${plClass}">${fmtMoney(m.realized_pnl)}</td>
+      <td class="mono">${m.trade_count}</td>
+    </tr>`;
+  }
+
+  async function loadPnl() {
+    try {
+      const res = await fetch(`/api/pnl/monthly?months=${pnlMonths.value}`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      pnlLoaded = true;
+
+      const months = data.months || [];
+      if (!months.length) {
+        pnlRows.innerHTML = '';
+        pnlEmpty.hidden = false;
+      } else {
+        pnlEmpty.hidden = true;
+        pnlRows.innerHTML = months.slice().reverse().map(renderPnlRow).join('');
+      }
+      pnlTotal.textContent = fmtMoney(data.total_realized_pnl);
+      pnlTotal.className = data.total_realized_pnl >= 0 ? 'pl-pos' : 'pl-neg';
+    } catch (e) {
+      pnlTotal.textContent = 'unavailable';
+    }
+  }
+
+  pnlMonths.addEventListener('change', loadPnl);
 </script>
 </body>
 </html>

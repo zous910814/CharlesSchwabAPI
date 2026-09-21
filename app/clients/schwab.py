@@ -207,6 +207,33 @@ class SchwabClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_transactions(
+        self,
+        account_id: str,
+        *,
+        start_date: str,
+        end_date: str,
+        types: str = "TRADE",
+        symbol: Optional[str] = None,
+    ) -> list[dict]:
+        """Transaction history (fills, dividends, transfers, ...) for realized
+        P&L reporting. start_date/end_date are ISO-8601 (e.g. from
+        datetime.isoformat()); Schwab caps the range per call, so callers
+        needing a longer history should chunk by year."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        params: dict[str, str] = {"startDate": start_date, "endDate": end_date, "types": types}
+        if symbol:
+            params["symbol"] = symbol
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/trader/v1/accounts/{account_id}/transactions",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_fundamentals(self, symbol: str) -> dict:
         """Fundamental data (P/E, EPS, margins, dividend yield, etc.) for a
         single symbol via Schwab's instruments endpoint. One symbol per call —

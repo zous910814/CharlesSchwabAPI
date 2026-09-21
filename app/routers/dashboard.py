@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 import httpx
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, data_pipeline, monitor
+from app.core import activity_log, data_pipeline, monitor, pnl
 from app.core.account import extract_buying_power, extract_equity, parse_positions
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
@@ -85,3 +85,19 @@ async def api_portfolio(
         "account_value": extract_equity(account),
         "positions": parse_positions(account),
     }
+
+
+@router.get("/api/pnl/monthly")
+async def api_pnl_monthly(
+    months: int = Query(12, ge=1, le=60),
+    settings: Settings = Depends(get_settings),
+    client: SchwabClient = Depends(get_schwab_client),
+) -> dict:
+    try:
+        return await pnl.compute_monthly_pnl(client, settings, months_back=months)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+    except Exception as exc:  # pragma: no cover - unexpected issues
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await client.aclose()

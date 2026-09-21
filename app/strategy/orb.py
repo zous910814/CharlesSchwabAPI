@@ -142,8 +142,11 @@ class EntryContext:
 
 
 def evaluate_long_entry(ctx: EntryContext) -> tuple[bool, dict]:
-    """All of spec §6's long-entry conditions (short-selling/§7 not implemented
-    — see README). Returns (passed, per-condition breakdown) for logging."""
+    """All of spec §6's long-entry conditions. Returns (passed, per-condition
+    breakdown) for logging. See evaluate_short_entry for the §7 mirror —
+    live trading (app/core/monitor.py) still only calls this one; the short
+    side is currently wired into the backtest only (no real-money shorting
+    yet — see README's note on short-locate data)."""
     or_width = ctx.or_high - ctx.or_low
     or_width_ok = (
         ctx.atr is not None
@@ -161,12 +164,52 @@ def evaluate_long_entry(ctx: EntryContext) -> tuple[bool, dict]:
     return all(checks.values()), checks
 
 
+def evaluate_short_entry(ctx: EntryContext) -> tuple[bool, dict]:
+    """Spec §7's short-entry conditions — the exact mirror of
+    evaluate_long_entry (breakout below OR_Low instead of above OR_High,
+    below VWAP/market-VWAP instead of above). RVOL/spread/OR-width are
+    magnitude checks, so they're identical to the long side.
+
+    Spec §7.7 (broker confirms the stock is borrowable, at an acceptable
+    locate cost) is NOT checked here — no historical or live short-locate
+    data source exists (same gap README already documents for the live
+    long-only strategy). Backtests using this function are therefore
+    optimistic versus what would actually be executable live."""
+    or_width = ctx.or_high - ctx.or_low
+    or_width_ok = (
+        ctx.atr is not None
+        and ctx.atr > 0
+        and (ctx.or_width_min_atr * ctx.atr) <= or_width <= (ctx.or_width_max_atr * ctx.atr)
+    )
+    checks = {
+        "breakdown_below_or_low": ctx.price < ctx.or_low,
+        "below_vwap": ctx.price < ctx.vwap,
+        "rvol_ok": ctx.rvol is not None and ctx.rvol >= ctx.rvol_min,
+        "spread_ok": ctx.spread_pct is not None and ctx.spread_pct <= ctx.spread_max_pct,
+        "market_aligned": ctx.market_price is not None and ctx.market_vwap is not None and ctx.market_price < ctx.market_vwap,
+        "or_width_ok": or_width_ok,
+    }
+    return all(checks.values()), checks
+
+
 def compute_stop_price(entry_price: float, or_high: float, atr: float, atr_mult: float) -> float:
     stop_distance = max(atr_mult * atr, entry_price - or_high)
     return entry_price - stop_distance
 
 
-def r_multiple(entry_price: float, stop_price: float, current_price: float) -> Optional[float]:
+def compute_short_stop_price(entry_price: float, or_low: float, atr: float, atr_mult: float) -> float:
+    """Mirror of compute_stop_price for a short position (spec §9.2: "做空方向
+    相反" — stop sits above entry instead of below)."""
+    stop_distance = max(atr_mult * atr, or_low - entry_price)
+    return entry_price + stop_distance
+
+
+def r_multiple(entry_price: float, stop_price: float, current_price: float, side: str = "long") -> Optional[float]:
+    if side == "short":
+        risk = stop_price - entry_price
+        if risk <= 0:
+            return None
+        return (entry_price - current_price) / risk
     risk = entry_price - stop_price
     if risk <= 0:
         return None

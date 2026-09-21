@@ -17,56 +17,15 @@ class Settings(BaseSettings):
     schwab_base_url: str = Field("https://api.schwabapi.com", env="SCHWAB_BASE_URL")
     schwab_dry_run: bool = Field(True, env="SCHWAB_DRY_RUN")
 
-    # Live-monitor loop (app/core/monitor.py)
-    watchlist_path: str = Field("watchlist.json", env="WATCHLIST_PATH")
+    # Live-monitor loop (app/core/monitor.py) — generic, strategy-agnostic
+    # risk controls that apply no matter what bought the position.
     monitor_poll_seconds: int = Field(60, env="MONITOR_POLL_SECONDS")
-    # Risk cap: max fraction of buying power a single BUY signal may spend.
-    schwab_max_position_pct: float = Field(0.05, env="SCHWAB_MAX_POSITION_PCT")
-    # Risk cap: max fraction of total account value one symbol's position may
-    # reach in total (across repeated BUYs), independent of the per-trade cap above.
-    schwab_max_symbol_exposure_pct: float = Field(0.15, env="SCHWAB_MAX_SYMBOL_EXPOSURE_PCT")
     # Stop-loss: force-sell a held position once it's down this fraction from
     # average cost, regardless of the K/D signal.
     schwab_stop_loss_pct: float = Field(0.10, env="SCHWAB_STOP_LOSS_PCT")
     # Circuit breaker: pause new BUY/SELL trades (stop-loss still runs) once
     # today's floating P&L drops below this fraction of account value.
     schwab_daily_loss_limit_pct: float = Field(0.03, env="SCHWAB_DAILY_LOSS_LIMIT_PCT")
-    # Risk cap: max total notional value of BUY orders submitted today, as a
-    # fraction of account value. Tracked by the monitor itself (not read back
-    # from Schwab) so it still holds even if the account's reported buying
-    # power hasn't yet caught up with an order submitted moments earlier.
-    schwab_max_daily_order_value_pct: float = Field(0.20, env="SCHWAB_MAX_DAILY_ORDER_VALUE_PCT")
-
-    # ORB (Opening Range Breakout) strategy — app/strategy/orb.py + monitor.py.
-    # Position sizing: shares = floor(account_equity * risk_pct / |entry - stop|).
-    schwab_orb_risk_pct: float = Field(0.0015, env="SCHWAB_ORB_RISK_PCT")
-    # Initial stop = entry - max(stop_atr_mult * ATR(14), entry - OR_High).
-    schwab_orb_stop_atr_mult: float = Field(0.5, env="SCHWAB_ORB_STOP_ATR_MULT")
-    schwab_orb_rvol_min: float = Field(1.5, env="SCHWAB_ORB_RVOL_MIN")
-    schwab_orb_spread_max_pct: float = Field(0.0005, env="SCHWAB_ORB_SPREAD_MAX_PCT")
-    schwab_orb_or_width_min_atr: float = Field(0.3, env="SCHWAB_ORB_OR_WIDTH_MIN_ATR")
-    schwab_orb_or_width_max_atr: float = Field(1.5, env="SCHWAB_ORB_OR_WIDTH_MAX_ATR")
-    schwab_orb_max_trades_per_symbol: int = Field(2, env="SCHWAB_ORB_MAX_TRADES_PER_SYMBOL")
-    schwab_orb_max_consecutive_losses: int = Field(3, env="SCHWAB_ORB_MAX_CONSECUTIVE_LOSSES")
-    schwab_orb_time_stop_minutes: int = Field(15, env="SCHWAB_ORB_TIME_STOP_MINUTES")
-    schwab_orb_time_stop_r: float = Field(0.5, env="SCHWAB_ORB_TIME_STOP_R")
-    schwab_orb_target1_r: float = Field(1.0, env="SCHWAB_ORB_TARGET1_R")
-    schwab_orb_target2_r: float = Field(1.5, env="SCHWAB_ORB_TARGET2_R")
-    # Master switch: false skips ALL ORB position management (reconciling
-    # untracked positions, stop/target/back-in-range exits, indicators) and
-    # entries — the poll loop only runs the circuit breaker and the blanket
-    # account-wide stop-loss. Needed because _reconcile_untracked_positions
-    # adopts *any* position it doesn't already know about (e.g. one KD just
-    # bought) into ORB's own exit rules, which are meant for intraday
-    # breakout trades, not multi-day swing positions. KD protects its own
-    # entries with a real broker-side stop order, so it has no dependency on
-    # this loop and is unaffected by turning ORB off entirely.
-    schwab_orb_enabled: bool = Field(True, env="SCHWAB_ORB_ENABLED")
-    # Pauses NEW ORB entries only (finer-grained than schwab_orb_enabled) —
-    # stop-losses, targets, EOD flatten, and the circuit breaker keep running
-    # for any already-open ORB position. Ignored when schwab_orb_enabled is
-    # false.
-    schwab_orb_entries_enabled: bool = Field(True, env="SCHWAB_ORB_ENTRIES_ENABLED")
 
     # LINE risk notifications (app/core/line_notify.py). All optional — unset
     # means notifications are silently skipped, not an error.
@@ -77,36 +36,29 @@ class Settings(BaseSettings):
     # Daily price-history pipeline (app/core/data_pipeline.py + price_history_db.py):
     # movers-based candidate universe -> daily OHLCV backfill into Postgres.
     # Optional — pipeline no-ops (logs + skips) if PG_DSN is unset, so a missing
-    # Postgres config never crashes the rest of the app.
+    # Postgres config never crashes the rest of the app. KD's golden/death-cross
+    # signal and its daily candidate pool both read straight from this table.
     pg_dsn: Optional[str] = Field(None, env="PG_DSN")
     price_history_movers_indices: str = Field("$DJI,$COMPX,$SPX", env="PRICE_HISTORY_MOVERS_INDICES")
     price_history_movers_sort: str = Field("VOLUME", env="PRICE_HISTORY_MOVERS_SORT")
     price_history_movers_frequency: int = Field(0, env="PRICE_HISTORY_MOVERS_FREQUENCY")
     price_history_backfill_days: int = Field(60, env="PRICE_HISTORY_BACKFILL_DAYS")
     # Fixed training-data universe (in addition to the movers-based daily
-    # candidates above) — a flat JSON array of symbols, kept up to date by hand
-    # like watchlist.json. Backfilled every run alongside the movers universe
-    # so historical coverage stays consistent day to day for model training.
+    # candidates above) — a flat JSON array of symbols, kept up to date by
+    # hand. Backfilled every run alongside the movers universe so historical
+    # coverage (and KD's candidate pool) stays consistent day to day.
     price_history_universe_path: str = Field("sp500_constituents.json", env="PRICE_HISTORY_UNIVERSE_PATH")
-    # "HH:MM" 24h, America/New_York (see app/strategy/orb.py MARKET_TZ). Default
-    # is 5 hours before the 9:30am ET open, so the previous day's (already
-    # settled) bar is loaded and a future regression/watchlist step has time
-    # to run before trading starts.
+    # "HH:MM" 24h, America/New_York. Default is 5 hours before the 9:30am ET
+    # open, so the previous day's (already settled) bar is loaded and KD's
+    # recommendation has time to run before trading starts.
     price_history_run_time_et: str = Field("04:30", env="PRICE_HISTORY_RUN_TIME_ET")
 
-    # Daily watchlist regression (app/core/watchlist_model.py). Runs right after
-    # the price-history backfill above (same job, same 04:30 ET slot) so
-    # watchlist.json is refreshed well before the 09:30 ET open. Disabling this
-    # leaves watchlist.json exactly as it was last written (manually or by a
-    # previous run) — the backfill itself is unaffected either way.
-    watchlist_auto_update: bool = Field(True, env="WATCHLIST_AUTO_UPDATE")
-    watchlist_top_n: int = Field(15, env="WATCHLIST_TOP_N")
-    watchlist_min_price: float = Field(5.0, env="WATCHLIST_MIN_PRICE")
-
-    # Daily KD golden/death-cross swing recommendation (app/core/kd_watchlist.py).
-    # NOTIFICATION ONLY — sends a LINE message describing what to buy/sell;
-    # never places an order itself. Runs in the same 04:30 ET job, after the
-    # watchlist regression above.
+    # Daily KD golden/death-cross swing strategy (app/core/kd_watchlist.py) —
+    # AUTO-TRADES for real (dry-run or live per SCHWAB_DRY_RUN above), not
+    # notification-only; see that module's docstring. Runs in the same
+    # 04:30 ET job as the price-history backfill above. Its death-cross/stop
+    # exit is also re-checked every monitor poll (~monitor_poll_seconds) off
+    # today's still-forming bar, not just once a day off last night's close.
     kd_watchlist_enabled: bool = Field(True, env="KD_WATCHLIST_ENABLED")
 
     class Config:

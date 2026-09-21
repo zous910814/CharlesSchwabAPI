@@ -1,8 +1,8 @@
 """Daily fundamentals snapshot: persists the *entire* payload from Schwab's
 per-symbol fundamental projection (app.clients.schwab.SchwabClient.
 get_fundamentals) into Postgres, one row per (symbol, day), so a future model
-can join fundamentals onto the price_history features already built in
-app.core.watchlist_model without re-fetching fields we skipped the first time.
+can join fundamentals onto the price_history features already built for
+app.core.kd_watchlist without re-fetching fields we skipped the first time.
 Shares the connection pool started by price_history_db.init_pool — this
 module only owns its own table.
 """

@@ -76,8 +76,9 @@ def get_pool() -> Optional[asyncpg.pool.Pool]:
 async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
     """Most recent completed daily bars for `symbol` (strictly before today,
     so a not-yet-finalized "today" row is never included), oldest first —
-    ready to feed straight into app.strategy.orb.compute_atr, which expects
-    that ordering and just needs high/low/close per bar."""
+    ready to feed straight into app.strategy.kd.compute_kd (via
+    kd_watchlist.check_intraday_exit), which expects that ordering and just
+    needs high/low/close per bar."""
     if _pool is None:
         return []
     async with _pool.acquire() as conn:
@@ -93,7 +94,7 @@ async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
 
 async def fetch_all_daily_bars() -> list[dict]:
     """Every symbol's full daily-bar history, oldest first per symbol — the
-    training set for app.core.watchlist_model's regression."""
+    training set for app.core.kd_watchlist's golden/death-cross features."""
     if _pool is None:
         return []
     async with _pool.acquire() as conn:

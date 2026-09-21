@@ -9,7 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, fundamentals_db, kd_watchlist, price_history_db, watchlist_model
+from app.core import activity_log, fundamentals_db, kd_watchlist, price_history_db
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
 from app.core.line_notify import (
@@ -146,8 +146,6 @@ async def run_once(settings: Optional[Settings] = None) -> dict:
             result["fundamentals"] = {"skipped": "pg_not_configured"}
     finally:
         await client.aclose()
-
-    result["watchlist"] = await watchlist_model.generate_and_write(settings)
 
     if settings.kd_watchlist_enabled and price_history_db.is_ready():
         kd_client = get_schwab_client(settings)

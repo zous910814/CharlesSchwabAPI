@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from app.core import activity_log, data_pipeline, monitor, price_history_db
+from app.core import activity_log, data_pipeline, fundamentals_db, monitor, price_history_db
 from app.core.config import get_settings
 from app.routers import accounts, auth, dashboard, line_webhook, orders
 
@@ -16,6 +16,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     await activity_log.init_db()
     await price_history_db.init_pool(settings)
+    await fundamentals_db.ensure_table()
     monitor_task = asyncio.create_task(monitor.run_forever())
     price_history_task = asyncio.create_task(data_pipeline.run_daily_forever())
     try:

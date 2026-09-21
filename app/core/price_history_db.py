@@ -67,6 +67,12 @@ def is_ready() -> bool:
     return _pool is not None
 
 
+def get_pool() -> Optional[asyncpg.pool.Pool]:
+    """Shared pool accessor for sibling *_db modules (e.g. fundamentals_db)
+    that persist to the same Postgres instance but own their own table."""
+    return _pool
+
+
 async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
     """Most recent completed daily bars for `symbol` (strictly before today,
     so a not-yet-finalized "today" row is never included), oldest first —

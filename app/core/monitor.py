@@ -735,7 +735,7 @@ async def _poll_once(settings: Settings) -> None:
                         detail={"phase": "manage_position"}, error=str(exc),
                     )
 
-            if watchlist and orb.is_entry_window(now):
+            if settings.schwab_orb_entries_enabled and watchlist and orb.is_entry_window(now):
                 try:
                     quotes = await client.get_quotes(watchlist)
                 except Exception as exc:  # noqa: BLE001

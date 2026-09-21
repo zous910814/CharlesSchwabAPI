@@ -9,10 +9,14 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, price_history_db, watchlist_model
+from app.core import activity_log, fundamentals_db, kd_watchlist, price_history_db, watchlist_model
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
-from app.core.line_notify import format_daily_watchlist_message, send_line_message
+from app.core.line_notify import (
+    format_daily_watchlist_message,
+    format_kd_recommendation_message,
+    send_line_message,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -73,6 +77,29 @@ async def backfill_symbol(client: SchwabClient, settings: Settings, symbol: str)
     return await price_history_db.upsert_daily_bars(symbol, history.get("candles") or [])
 
 
+async def fetch_fundamentals_for_universe(client: SchwabClient, universe: list[str]) -> dict:
+    """One get_fundamentals() call per symbol -> upsert into fundamentals_db,
+    keyed to today's date so repeated same-day runs overwrite rather than
+    duplicate. Same fail-soft contract as backfill_symbol: one symbol's
+    failure never aborts the batch."""
+    today = datetime.now(MARKET_TZ).date()
+    result = {"symbols_ok": 0, "symbols_failed": []}
+    for symbol in universe:
+        try:
+            response = await client.get_fundamentals(symbol)
+            parsed = fundamentals_db.parse_instrument(response)
+            if parsed is None:
+                raise ValueError("symbol_not_found")
+            await fundamentals_db.upsert_fundamental(symbol, today, parsed)
+            result["symbols_ok"] += 1
+        except Exception as exc:
+            result["symbols_failed"].append(symbol)
+            await activity_log.log_event(
+                event_type="fundamentals_backfill", symbol=symbol, status="error", error=str(exc)
+            )
+    return result
+
+
 async def run_once(settings: Optional[Settings] = None) -> dict:
     """Fetch movers -> candidate universe, plus the fixed training-data
     universe -> per-symbol daily-bar backfill -> upsert (deduped union, each
@@ -112,10 +139,28 @@ async def run_once(settings: Optional[Settings] = None) -> dict:
                 await activity_log.log_event(
                     event_type="price_history_backfill", symbol=symbol, status="error", error=str(exc)
                 )
+
+        if fundamentals_db.is_ready():
+            result["fundamentals"] = await fetch_fundamentals_for_universe(client, universe)
+        else:
+            result["fundamentals"] = {"skipped": "pg_not_configured"}
     finally:
         await client.aclose()
 
     result["watchlist"] = await watchlist_model.generate_and_write(settings)
+
+    if settings.kd_watchlist_enabled and price_history_db.is_ready():
+        kd_client = get_schwab_client(settings)
+        try:
+            result["kd_recommendation"] = await kd_watchlist.recommend_action(settings, kd_client)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("kd_watchlist recommendation failed")
+            result["kd_recommendation"] = {"error": str(exc)}
+        finally:
+            await kd_client.aclose()
+        await send_line_message(settings, format_kd_recommendation_message(result["kd_recommendation"]))
+    else:
+        result["kd_recommendation"] = {"skipped": "disabled_or_pg_not_configured"}
 
     STATE.update(
         last_run_date=datetime.now(MARKET_TZ).date().isoformat(),

@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from collections import deque
 from typing import Optional
@@ -189,6 +190,29 @@ class SchwabClient:
         await self._throttle()
         response = await self._get_http().get(
             f"{self._api_root()}/marketdata/v1/quotes",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_fundamentals(self, symbol: str) -> dict:
+        """Fundamental data (P/E, EPS, margins, dividend yield, etc.) for a
+        single symbol via Schwab's instruments endpoint. One symbol per call —
+        unlike get_quotes, the fundamental projection doesn't take a
+        comma-separated batch."""
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        # Schwab wants share-class tickers as "BRK/B", not the "BRK.B" dot
+        # notation common in constituent lists (e.g. sp500_constituents.json)
+        # — passing the dot form silently matches zero instruments. Only the
+        # outbound API param is rewritten; callers keep using the dot form as
+        # the row key, so it still joins against price_history / watchlist.
+        api_symbol = re.sub(r"^([A-Z]+)\.([A-Z])$", r"\1/\2", symbol)
+        params = {"symbol": api_symbol, "projection": "fundamental"}
+        await self._throttle()
+        response = await self._get_http().get(
+            f"{self._api_root()}/marketdata/v1/instruments",
             headers=headers,
             params=params,
         )

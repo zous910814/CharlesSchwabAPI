@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     schwab_orb_time_stop_r: float = Field(0.5, env="SCHWAB_ORB_TIME_STOP_R")
     schwab_orb_target1_r: float = Field(1.0, env="SCHWAB_ORB_TARGET1_R")
     schwab_orb_target2_r: float = Field(1.5, env="SCHWAB_ORB_TARGET2_R")
+    # Pauses NEW ORB entries only — stop-losses, targets, EOD flatten, and the
+    # circuit breaker keep running for any already-open position. Set false
+    # while testing KD (app/core/kd_watchlist.py) on the same small account so
+    # the two strategies never compete for the same buying power.
+    schwab_orb_entries_enabled: bool = Field(True, env="SCHWAB_ORB_ENTRIES_ENABLED")
 
     # LINE risk notifications (app/core/line_notify.py). All optional — unset
     # means notifications are silently skipped, not an error.
@@ -87,6 +92,12 @@ class Settings(BaseSettings):
     watchlist_auto_update: bool = Field(True, env="WATCHLIST_AUTO_UPDATE")
     watchlist_top_n: int = Field(15, env="WATCHLIST_TOP_N")
     watchlist_min_price: float = Field(5.0, env="WATCHLIST_MIN_PRICE")
+
+    # Daily KD golden/death-cross swing recommendation (app/core/kd_watchlist.py).
+    # NOTIFICATION ONLY — sends a LINE message describing what to buy/sell;
+    # never places an order itself. Runs in the same 04:30 ET job, after the
+    # watchlist regression above.
+    kd_watchlist_enabled: bool = Field(True, env="KD_WATCHLIST_ENABLED")
 
     class Config:
         case_sensitive = False

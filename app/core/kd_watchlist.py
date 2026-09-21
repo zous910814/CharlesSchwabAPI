@@ -5,12 +5,17 @@ or nothing) and, unlike the first cut of this module, submits the order
 itself through app.core.order_executor.submit_order — the same function and
 safety gate the ORB live-trading path uses. THIS MEANS submit_order's
 SCHWAB_DRY_RUN gate is what stands between this and real fills: dry_run=true
-(both .env and .env.vps, as of when this was written) sends every order to
-Schwab's previewOrder endpoint only — validated, never executed — while
-dry_run=false places it live. Flipping that setting is the actual "go live"
-switch; changing it is a deliberate, separate decision from deploying this
-code. A LINE message (app.core.line_notify.format_kd_recommendation_message)
-reports what happened either way.
+sends every order to Schwab's previewOrder endpoint only — validated, never
+executed — while dry_run=false places it live. As of when this was written,
+the VPS's real .env (not tracked by git — see docs/VPS_OPERATIONS.md) already
+has SCHWAB_DRY_RUN=false, so this strategy goes live on real fills the moment
+this code is deployed there and a golden-cross signal fires — there is no
+separate "go live" step after deploying. That was a deliberate, informed
+choice made in the conversation this came from, not an accident; if that's
+no longer the intent, set SCHWAB_DRY_RUN=true on the VPS before deploying
+future changes to this file. A LINE message
+(app.core.line_notify.format_kd_recommendation_message) reports what
+happened either way.
 
 Why this exists (see the conversation this came from): across everything
 backtested — ORB long/short, a return-prediction regression, this same KD

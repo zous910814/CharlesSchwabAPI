@@ -114,6 +114,14 @@ def format_kd_recommendation_message(result: dict) -> str:
             lines.append(order_line)
         elif result.get("reason") == "insufficient_buying_power":
             lines.append("No order sent: insufficient buying power for even 1 share")
+
+        stop_order = result.get("stop_order")
+        if stop_order is not None:
+            lines.append(f"Stop order: LIVE - resting SELL STOP at {result['stop_price']:.2f} placed at Schwab")
+        elif result.get("stop_order_error"):
+            lines.append(f"Stop order FAILED to place: {result['stop_order_error'][:200]} "
+                          "- position is UNPROTECTED, check manually")
+
         others = [c for c in result.get("candidates", []) if c != result["symbol"]]
         if others:
             lines.append(f"Other golden crosses today (not picked): {', '.join(others)}")

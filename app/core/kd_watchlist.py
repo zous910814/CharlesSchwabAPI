@@ -17,6 +17,13 @@ future changes to this file. A LINE message
 (app.core.line_notify.format_kd_recommendation_message) reports what
 happened either way.
 
+v2: a live BUY also places a real resting SELL STOP at the broker (see
+_stop_order) for the ATR(14)*2 stop, cancelled and replaced by a market
+SELL on a death-cross exit. Before this, the stop was only a value this
+module rechecked once a day against the prior day's low — real protection
+only as timely as the next scheduled run, not the moment the price actually
+crossed it intraday.
+
 Why this exists (see the conversation this came from): across everything
 backtested — ORB long/short, a return-prediction regression, this same KD
 rule with several variants — app/strategy/kd.py's golden-cross-in-oversold
@@ -97,6 +104,37 @@ def _market_order(symbol: str, instruction: str, quantity: float) -> dict:
             {"instruction": instruction, "quantity": quantity, "instrument": {"symbol": symbol, "assetType": "EQUITY"}}
         ],
     }
+
+
+def _stop_order(symbol: str, quantity: float, stop_price: float) -> dict:
+    """A real resting SELL STOP at the broker — unlike the once-a-day
+    low-vs-stop_price check this module also does, this fires the instant
+    Schwab prints a trade at or below stop_price, not the next time the
+    daily pipeline happens to run. GOOD_TILL_CANCEL so it survives the many
+    days this swing strategy typically holds a position, not just today."""
+    return {
+        "orderType": "STOP",
+        "session": "NORMAL",
+        "duration": "GOOD_TILL_CANCEL",
+        "orderStrategyType": "SINGLE",
+        "stopPrice": f"{stop_price:.2f}",
+        "orderLegCollection": [
+            {"instruction": "SELL", "quantity": quantity, "instrument": {"symbol": symbol, "assetType": "EQUITY"}}
+        ],
+    }
+
+
+def _extract_order_id(order_result: Optional[dict]) -> Optional[str]:
+    """submit_order's return: dry-run previews carry no real order id (no
+    order was actually created); a live placement's id is the last path
+    segment of the Location header submit_order/place_order passes through."""
+    if not order_result or order_result.get("dry_run"):
+        return None
+    location = order_result.get("location")
+    if location:
+        return location.rstrip("/").rsplit("/", 1)[-1]
+    order_id = order_result.get("orderId")
+    return str(order_id) if order_id is not None else None
 
 
 def _add_consecutive_oversold(df: pd.DataFrame) -> pd.DataFrame:
@@ -184,6 +222,7 @@ async def _current_kd_position() -> Optional[dict]:
         "entry_price": detail.get("entry_price"),
         "stop_price": detail.get("stop_price"),
         "entry_date": detail.get("entry_date"),
+        "stop_order_id": detail.get("stop_order_id"),
     }
 
 
@@ -232,6 +271,20 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
                 shares = extract_position_qty(account, symbol)
                 result = {"action": "SELL", "symbol": symbol, "reason": reason, "shares": shares,
                           "trade_date": str(latest_date)}
+
+                # Cancel the resting broker-side stop before market-selling -
+                # otherwise a stale SELL STOP for shares we no longer hold
+                # stays working. If reason is stop_hit, that order may have
+                # already filled/vanished on its own; cancelling a
+                # nonexistent order just fails harmlessly here.
+                stop_order_id = position.get("stop_order_id")
+                if stop_order_id:
+                    try:
+                        await client.cancel_order(settings.schwab_account_id, stop_order_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info("kd_watchlist: stop-order cancel for %s (%s) did not succeed: %s",
+                                    symbol, stop_order_id, exc)
+
                 if shares > 0:
                     order_body = _market_order(symbol, "SELL", shares)
                     try:
@@ -288,6 +341,7 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
         "atr14": float(atr), "shares": shares, "buying_power": buying_power,
         "candidates": candidates["symbol"].tolist(), "trade_date": str(latest_date),
     }
+    stop_order_id = None
     if shares >= 1:
         order_body = _market_order(symbol, "BUY", shares)
         try:
@@ -297,12 +351,30 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
             )
         except Exception as exc:  # noqa: BLE001
             result["order_error"] = str(exc)
+
+        # A real resting SELL STOP at the broker, not just a value this
+        # module rechecks once a day - see _stop_order. Only placed for a
+        # LIVE buy (dry-run's preview never actually buys anything, so
+        # there'd be nothing to protect); if the buy call itself raised,
+        # still skip this (same reasoning).
+        if result.get("order") and not result["order"].get("dry_run"):
+            stop_body = _stop_order(symbol, shares, stop_price)
+            try:
+                stop_result = await submit_order(
+                    client=client, settings=settings, account_id=settings.schwab_account_id,
+                    order_body=stop_body, source="kd_watchlist_stop",
+                )
+                result["stop_order"] = stop_result
+                stop_order_id = _extract_order_id(stop_result)
+            except Exception as exc:  # noqa: BLE001
+                result["stop_order_error"] = str(exc)
     else:
         result["reason"] = "insufficient_buying_power"
 
     await activity_log.log_event(
         event_type="kd_entry", symbol=symbol, status="signal",
         detail={"entry_price": entry_price, "stop_price": stop_price, "atr14": float(atr),
-                "entry_date": str(latest_date), "candidates": candidates["symbol"].tolist(), "shares": shares},
+                "entry_date": str(latest_date), "candidates": candidates["symbol"].tolist(), "shares": shares,
+                "stop_order_id": stop_order_id},
     )
     return result

@@ -132,6 +132,17 @@ class SchwabClient:
     async def place_order(self, account_id: str, order_body: dict) -> dict:
         return await self._orders_request("orders", account_id, order_body)
 
+    async def cancel_order(self, account_id: str, order_id: str) -> dict:
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        await self._throttle()
+        response = await self._get_http().delete(
+            f"{self._api_root()}/trader/v1/accounts/{account_id}/orders/{order_id}",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return {"status_code": response.status_code}
+
     async def preview_order(self, account_id: str, order_body: dict) -> dict:
         """Validate an order (commission/cost estimate, margin/balance checks)
         without executing it — Schwab's previewOrder endpoint."""

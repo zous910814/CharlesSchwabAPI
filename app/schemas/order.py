@@ -22,4 +22,5 @@ class OrderRequest(BaseModel):
     duration: str = "DAY"
     orderStrategyType: str = "SINGLE"
     price: Optional[float] = None
+    stopPrice: Optional[float] = None
     orderLegCollection: list[OrderLeg]

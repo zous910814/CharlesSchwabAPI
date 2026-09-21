@@ -159,24 +159,14 @@
         </span>
         <button id="pause-btn" class="btn" type="button">Pause</button>
       </div>
-      <span class="monitor-meta" id="monitor-meta" style="display:block;margin-bottom:8px">—</span>
-      <div style="overflow-x:auto">
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Close</th>
-            <th>OR Lo–Hi</th>
-            <th>VWAP</th>
-            <th>RVOL</th>
-            <th>Spread%</th>
-            <th>Position</th>
-          </tr>
-        </thead>
-        <tbody id="monitor-rows"></tbody>
-      </table>
-      </div>
-      <div id="monitor-empty" class="empty" hidden>No symbols evaluated yet — check watchlist.json and market hours.</div>
+      <span class="monitor-meta" id="monitor-meta" style="display:block">—</span>
+      <p class="sub" style="margin:8px 0 0">
+        Account-wide safety net (circuit breaker + blanket stop-loss) and KD's
+        intraday death-cross/stop check run every poll. KD's own BUY/SELL
+        decisions and position status show up in the activity log below —
+        filter Event by <code>kd_entry</code>, <code>kd_exit</code>, or
+        <code>kd_intraday_exit</code>.
+      </p>
     </div>
   </div>
 
@@ -190,23 +180,21 @@
       <option value="dry_run">dry_run</option>
       <option value="sent">sent</option>
       <option value="skipped">skipped</option>
+      <option value="signal">signal</option>
       <option value="BUY">BUY</option>
+      <option value="SELL">SELL</option>
       <option value="HOLD">HOLD</option>
-      <option value="target1">target1</option>
-      <option value="target2">target2</option>
+      <option value="death_cross">death_cross</option>
       <option value="stop_hit">stop_hit</option>
-      <option value="time_stop">time_stop</option>
-      <option value="eod_flatten">eod_flatten</option>
-      <option value="vwap_cross_back">vwap_cross_back</option>
-      <option value="back_in_range">back_in_range</option>
     </select>
     <select id="f-event">
       <option value="">All events</option>
       <option value="order_submitted">order_submitted</option>
       <option value="order_result">order_result</option>
-      <option value="signal_check">signal_check</option>
       <option value="order_skipped">order_skipped</option>
-      <option value="orb_exit">orb_exit</option>
+      <option value="kd_entry">kd_entry</option>
+      <option value="kd_exit">kd_exit</option>
+      <option value="kd_intraday_exit">kd_intraday_exit</option>
       <option value="circuit_breaker">circuit_breaker</option>
       <option value="stop_loss_triggered">stop_loss_triggered</option>
       <option value="monitor_control">monitor_control</option>
@@ -298,8 +286,6 @@
   const breakerBadge = document.getElementById('breaker-badge');
   const pauseBtn = document.getElementById('pause-btn');
   const monitorMeta = document.getElementById('monitor-meta');
-  const monitorRows = document.getElementById('monitor-rows');
-  const monitorEmpty = document.getElementById('monitor-empty');
   let manualPause = false;
 
   pauseBtn.addEventListener('click', async () => {
@@ -311,26 +297,6 @@
       pauseBtn.disabled = false;
     }
   });
-
-  function renderMonitorRow(symbol, s) {
-    const num = (v, d = 2) => (typeof v === 'number') ? v.toFixed(d) : '-';
-    const orRange = (typeof s.or_low === 'number' && typeof s.or_high === 'number')
-      ? `${num(s.or_low)}–${num(s.or_high)}` : '-';
-    const spread = (typeof s.spread_pct === 'number') ? `${(s.spread_pct * 100).toFixed(3)}%` : '-';
-    const pos = s.position;
-    const posText = pos
-      ? `<span class="badge ${pos.r_multiple >= 0 ? 'BUY' : 'SELL'}">${pos.shares} @ ${num(pos.r_multiple)}R</span>`
-      : '-';
-    return `<tr>
-      <td><code class="symbol">${esc(symbol)}</code></td>
-      <td class="mono">${num(s.close)}</td>
-      <td class="mono">${orRange}</td>
-      <td class="mono">${num(s.vwap)}</td>
-      <td class="mono">${num(s.rvol)}</td>
-      <td class="mono">${spread}</td>
-      <td>${posText}</td>
-    </tr>`;
-  }
 
   async function loadMonitor() {
     try {
@@ -352,15 +318,6 @@
       monitorMeta.textContent = state.last_poll
         ? `last poll: ${fmtLA(state.last_poll)}${dayPl}${state.last_error ? ' — error: ' + state.last_error : ''}`
         : 'not polled yet';
-
-      const symbols = Object.entries(state.symbols || {});
-      if (!symbols.length) {
-        monitorRows.innerHTML = '';
-        monitorEmpty.hidden = false;
-        return;
-      }
-      monitorEmpty.hidden = true;
-      monitorRows.innerHTML = symbols.map(([sym, s]) => renderMonitorRow(sym, s)).join('');
     } catch (e) {
       monitorMeta.textContent = 'monitor status unavailable';
     }

@@ -55,12 +55,7 @@ class Settings(BaseSettings):
     # Master switch: false skips ALL ORB position management (reconciling
     # untracked positions, stop/target/back-in-range exits, indicators) and
     # entries — the poll loop only runs the circuit breaker and the blanket
-    # account-wide stop-loss. Needed because _reconcile_untracked_positions
-    # adopts *any* position it doesn't already know about (e.g. one KD just
-    # bought) into ORB's own exit rules, which are meant for intraday
-    # breakout trades, not multi-day swing positions. KD protects its own
-    # entries with a real broker-side stop order, so it has no dependency on
-    # this loop and is unaffected by turning ORB off entirely.
+    # account-wide stop-loss.
     schwab_orb_enabled: bool = Field(True, env="SCHWAB_ORB_ENABLED")
     # Pauses NEW ORB entries only (finer-grained than schwab_orb_enabled) —
     # stop-losses, targets, EOD flatten, and the circuit breaker keep running
@@ -102,12 +97,6 @@ class Settings(BaseSettings):
     watchlist_auto_update: bool = Field(True, env="WATCHLIST_AUTO_UPDATE")
     watchlist_top_n: int = Field(15, env="WATCHLIST_TOP_N")
     watchlist_min_price: float = Field(5.0, env="WATCHLIST_MIN_PRICE")
-
-    # Daily KD golden/death-cross swing recommendation (app/core/kd_watchlist.py).
-    # NOTIFICATION ONLY — sends a LINE message describing what to buy/sell;
-    # never places an order itself. Runs in the same 04:30 ET job, after the
-    # watchlist regression above.
-    kd_watchlist_enabled: bool = Field(True, env="KD_WATCHLIST_ENABLED")
 
     class Config:
         case_sensitive = False

@@ -89,56 +89,6 @@ def format_daily_watchlist_message(result: dict) -> str:
     return "\n".join(lines)
 
 
-def format_kd_recommendation_message(result: dict) -> str:
-    """result: app.core.kd_watchlist.recommend_action's return value. That
-    function actually submits the order (dry-run or live per SCHWAB_DRY_RUN)
-    before returning - this message reports what happened, it doesn't ask
-    the user to act."""
-    now = datetime.now(LA_TZ).strftime("%Y-%m-%d %H:%M:%S PT")
-    lines = [f"[KD Swing] {now}"]
-
-    order = result.get("order")
-    order_line = None
-    if order is not None:
-        order_line = "Order: PREVIEW only (SCHWAB_DRY_RUN=true)" if order.get("dry_run") else "Order: LIVE - submitted to Schwab"
-    elif result.get("order_error"):
-        order_line = f"Order FAILED: {result['order_error'][:200]}"
-
-    action = result.get("action")
-    if action == "BUY":
-        stop_distance = result["entry_price"] - result["stop_price"]
-        lines.append(f"BUY {result.get('shares', 0)} {result['symbol']}")
-        lines.append(f"Sizing reference (signal-day close): {result['entry_price']:.2f}, "
-                      f"stop {stop_distance:.2f} below fill (2x ATR14={result['atr14']:.2f})")
-        if order_line:
-            lines.append(order_line)
-        elif result.get("reason") == "insufficient_buying_power":
-            lines.append("No order sent: insufficient buying power for even 1 share")
-
-        stop_order = result.get("stop_order")
-        if stop_order is not None:
-            lines.append(f"Stop order: LIVE - resting SELL STOP at {result['stop_price']:.2f} placed at Schwab")
-        elif result.get("stop_order_error"):
-            lines.append(f"Stop order FAILED to place: {result['stop_order_error'][:200]} "
-                          "- position is UNPROTECTED, check manually")
-
-        others = [c for c in result.get("candidates", []) if c != result["symbol"]]
-        if others:
-            lines.append(f"Other golden crosses today (not picked): {', '.join(others)}")
-    elif action == "SELL":
-        lines.append(f"SELL {result.get('shares', 0)} {result['symbol']} (reason: {result.get('reason')})")
-        if order_line:
-            lines.append(order_line)
-    elif action == "HOLD":
-        lines.append(f"Holding {result['symbol']} - no exit signal today")
-    elif action == "NONE":
-        lines.append("No golden cross today - stay flat")
-    elif result.get("skipped"):
-        lines.append(f"Skipped: {result['skipped']}")
-
-    return "\n".join(lines)
-
-
 async def send_line_message(settings: Settings, text: str) -> None:
     if not settings.line_channel_access_token or not settings.line_user_id:
         return  # not configured yet — silent no-op, never blocks the caller

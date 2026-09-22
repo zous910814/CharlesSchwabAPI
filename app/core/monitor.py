@@ -201,6 +201,16 @@ async def _poll_once(settings: Settings) -> None:
                     event_type="monitor_error", status="error",
                     detail={"phase": "kd_intraday_exit"}, error=str(exc),
                 )
+
+            # Places the resting stop for a still-pending KD entry the moment
+            # its BUY actually fills - see kd_watchlist.ensure_stop_order.
+            try:
+                await kd_watchlist.ensure_stop_order(settings, client)
+            except Exception as exc:  # noqa: BLE001
+                await activity_log.log_event(
+                    event_type="monitor_error", status="error",
+                    detail={"phase": "kd_ensure_stop_order"}, error=str(exc),
+                )
     finally:
         await client.aclose()
 

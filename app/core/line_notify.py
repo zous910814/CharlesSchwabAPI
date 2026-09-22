@@ -16,8 +16,14 @@ LA_TZ = ZoneInfo("America/Los_Angeles")
 
 # (event_type, status) combos worth waking someone up for. "orb_exit" and
 # "order_result" are only risky for specific statuses, so those are handled
-# separately below rather than listed wholesale here.
-_ALWAYS_RISKY_EVENT_TYPES = {"stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted"}
+# separately below rather than listed wholesale here. "kd_stop_placed"
+# covers both statuses it's ever logged with ("placed"/"error") - both are
+# worth a push, since it's the only place that reports whether a KD
+# position's protective stop actually made it to the broker (see
+# kd_watchlist.ensure_stop_order).
+_ALWAYS_RISKY_EVENT_TYPES = {
+    "stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted", "kd_stop_placed",
+}
 
 
 def is_risk_event(event_type: str, status: Optional[str]) -> bool:
@@ -44,7 +50,8 @@ def format_risk_message(
         lines.append(f"Symbol: {symbol}")
 
     if isinstance(detail, dict):
-        for key in ("reason", "r_multiple", "unrealized_pl_pct", "day_pl", "quantity", "phase"):
+        for key in ("reason", "r_multiple", "unrealized_pl_pct", "day_pl", "quantity", "phase",
+                    "stop_price", "stop_order_id"):
             if key in detail and detail[key] is not None:
                 value = detail[key]
                 if isinstance(value, float):
@@ -115,12 +122,9 @@ def format_kd_recommendation_message(result: dict) -> str:
         elif result.get("reason") == "insufficient_buying_power":
             lines.append("No order sent: insufficient buying power for even 1 share")
 
-        stop_order = result.get("stop_order")
-        if stop_order is not None:
-            lines.append(f"Stop order: LIVE - resting SELL STOP at {result['stop_price']:.2f} placed at Schwab")
-        elif result.get("stop_order_error"):
-            lines.append(f"Stop order FAILED to place: {result['stop_order_error'][:200]} "
-                          "- position is UNPROTECTED, check manually")
+        if order is not None and not order.get("dry_run"):
+            lines.append(f"Stop order: pending - placed once the BUY fills "
+                          f"(target {result['stop_price']:.2f}; separate alert when it's actually placed)")
 
         others = [c for c in result.get("candidates", []) if c != result["symbol"]]
         if others:

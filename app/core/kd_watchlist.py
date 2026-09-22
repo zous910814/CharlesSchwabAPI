@@ -24,6 +24,17 @@ module rechecked once a day against the prior day's low — real protection
 only as timely as the next scheduled run, not the moment the price actually
 crossed it intraday.
 
+v3: the stop is no longer placed synchronously right after the BUY. This
+module runs once daily at PRICE_HISTORY_RUN_TIME_ET (04:30 ET by default) —
+well before the 09:30 ET open — so a NORMAL-session MARKET BUY submitted
+here sits WORKING for hours, not seconds; a SELL STOP placed immediately
+after it got rejected by Schwab outright, since the account didn't hold the
+shares yet (a real production incident, not a hypothetical). The BUY is
+still submitted here, but the stop is placed by
+monitor.py's poll loop calling ensure_stop_order every ~60s during market
+hours, once the account's actual holdings confirm the fill (see
+ensure_stop_order's docstring).
+
 Why this exists (see the conversation this came from): across everything
 backtested — ORB long/short, a return-prediction regression, this same KD
 rule with several variants — app/strategy/kd.py's golden-cross-in-oversold
@@ -320,7 +331,15 @@ async def check_intraday_exit(settings: Settings, client: SchwabClient) -> Optio
 
 
 async def _current_kd_position() -> Optional[dict]:
-    """Most recent kd_entry event, unless a later kd_exit already closed it."""
+    """Most recent kd_entry event, unless a later kd_exit already closed it.
+
+    stop_order_id comes from a later kd_stop_placed event (see
+    ensure_stop_order), not kd_entry's own detail - the stop is no longer
+    placed synchronously right after the BUY (see ensure_stop_order's
+    docstring for why), so at the moment kd_entry is logged there is no
+    stop order yet. kd_entry still carries a stop_order_id key for backward
+    compatibility with rows logged before this change; it's always None on
+    rows logged after."""
     entries = await activity_log.fetch_events(event_type="kd_entry", limit=1)
     if not entries:
         return None
@@ -328,14 +347,75 @@ async def _current_kd_position() -> Optional[dict]:
     exits = await activity_log.fetch_events(event_type="kd_exit", limit=1)
     if exits and exits[0]["id"] > latest_entry["id"]:
         return None
+
     detail = latest_entry.get("detail") or {}
+    symbol = latest_entry.get("symbol")
+    stop_order_id = detail.get("stop_order_id")
+    if stop_order_id is None:
+        stop_events = await activity_log.fetch_events(
+            event_type="kd_stop_placed", symbol=symbol, status="placed", limit=1
+        )
+        if stop_events and stop_events[0]["id"] > latest_entry["id"]:
+            stop_order_id = (stop_events[0].get("detail") or {}).get("stop_order_id")
+
     return {
-        "symbol": latest_entry.get("symbol"),
+        "symbol": symbol,
         "entry_price": detail.get("entry_price"),
         "stop_price": detail.get("stop_price"),
         "entry_date": detail.get("entry_date"),
-        "stop_order_id": detail.get("stop_order_id"),
+        "stop_order_id": stop_order_id,
+        "dry_run": bool(detail.get("dry_run")),
     }
+
+
+async def ensure_stop_order(settings: Settings, client: SchwabClient) -> Optional[dict]:
+    """Places the resting broker-side SELL STOP for the current KD position
+    once its entry BUY has actually filled - called every monitor poll
+    (~60s during market hours) rather than right after submitting the BUY.
+
+    recommend_action runs once daily at PRICE_HISTORY_RUN_TIME_ET, which
+    defaults to 04:30 ET - well before the 09:30 ET open. A NORMAL-session
+    MARKET order submitted then sits WORKING for hours, not seconds; placing
+    the stop immediately afterward (the old behavior) meant Schwab almost
+    always rejected it outright, since the account didn't hold the shares
+    yet - exactly the "stop order didn't land" failure this function fixes.
+    Uses the account's actual held quantity (not the entry's estimated
+    `shares`) so a partial fill still gets a correctly-sized stop."""
+    position = await _current_kd_position()
+    if position is None or position.get("stop_order_id") or position.get("dry_run"):
+        return None
+    if position.get("stop_price") is None:
+        return None
+
+    symbol = position["symbol"]
+    try:
+        account = await client.get_account(settings.schwab_account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("kd_watchlist ensure_stop_order: account fetch failed: %s", exc)
+        return None
+
+    quantity = extract_position_qty(account, symbol)
+    if quantity <= 0:
+        return None  # BUY hasn't filled yet (or never will) - retry next poll
+
+    stop_body = _stop_order(symbol, quantity, position["stop_price"])
+    try:
+        stop_result = await submit_order(
+            client=client, settings=settings, account_id=settings.schwab_account_id,
+            order_body=stop_body, source="kd_watchlist_stop",
+        )
+        stop_order_id = _extract_order_id(stop_result)
+        await activity_log.log_event(
+            event_type="kd_stop_placed", symbol=symbol, status="placed",
+            detail={"stop_order_id": stop_order_id, "quantity": quantity, "stop_price": position["stop_price"]},
+        )
+        return {"symbol": symbol, "stop_order_id": stop_order_id, "quantity": quantity}
+    except Exception as exc:  # noqa: BLE001
+        await activity_log.log_event(
+            event_type="kd_stop_placed", symbol=symbol, status="error",
+            detail={"quantity": quantity, "stop_price": position["stop_price"]}, error=str(exc),
+        )
+        return None
 
 
 async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
@@ -423,7 +503,7 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
         "atr14": float(atr), "shares": shares, "buying_power": buying_power,
         "candidates": candidates["symbol"].tolist(), "trade_date": str(latest_date),
     }
-    stop_order_id = None
+    is_dry_run = False
     if shares >= 1:
         order_body = _market_order(symbol, "BUY", shares)
         try:
@@ -431,25 +511,18 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
                 client=client, settings=settings, account_id=settings.schwab_account_id,
                 order_body=order_body, source="kd_watchlist",
             )
+            is_dry_run = bool(result["order"].get("dry_run"))
         except Exception as exc:  # noqa: BLE001
             result["order_error"] = str(exc)
 
-        # A real resting SELL STOP at the broker, not just a value this
-        # module rechecks once a day - see _stop_order. Only placed for a
-        # LIVE buy (dry-run's preview never actually buys anything, so
-        # there'd be nothing to protect); if the buy call itself raised,
-        # still skip this (same reasoning).
-        if result.get("order") and not result["order"].get("dry_run"):
-            stop_body = _stop_order(symbol, shares, stop_price)
-            try:
-                stop_result = await submit_order(
-                    client=client, settings=settings, account_id=settings.schwab_account_id,
-                    order_body=stop_body, source="kd_watchlist_stop",
-                )
-                result["stop_order"] = stop_result
-                stop_order_id = _extract_order_id(stop_result)
-            except Exception as exc:  # noqa: BLE001
-                result["stop_order_error"] = str(exc)
+        # The stop is NOT placed here anymore - see ensure_stop_order's
+        # docstring. This runs pre-market (PRICE_HISTORY_RUN_TIME_ET,
+        # default 04:30 ET), so a NORMAL-session MARKET BUY submitted above
+        # won't fill for hours; a SELL STOP placed immediately after it used
+        # to get rejected outright since the account didn't hold the shares
+        # yet. monitor.py's poll loop calls ensure_stop_order every ~60s
+        # during market hours and places the stop the moment the account
+        # actually shows the fill.
     else:
         result["reason"] = "insufficient_buying_power"
 
@@ -457,6 +530,6 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
         event_type="kd_entry", symbol=symbol, status="signal",
         detail={"entry_price": entry_price, "stop_price": stop_price, "atr14": float(atr),
                 "entry_date": str(latest_date), "candidates": candidates["symbol"].tolist(), "shares": shares,
-                "stop_order_id": stop_order_id},
+                "stop_order_id": None, "dry_run": is_dry_run},
     )
     return result

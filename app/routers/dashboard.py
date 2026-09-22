@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 import httpx
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, data_pipeline, monitor, pnl
+from app.core import activity_log, data_pipeline, kd_watchlist, monitor, pnl, price_history_db
 from app.core.account import extract_buying_power, extract_equity, parse_positions
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
@@ -85,6 +85,30 @@ async def api_portfolio(
         "account_value": extract_equity(account),
         "positions": parse_positions(account),
     }
+
+
+@router.get("/api/candles/{symbol}")
+async def api_candles(symbol: str, days: int = Query(90, ge=10, le=250)) -> dict:
+    """Daily OHLCV for the dashboard's position chart. `position` is only
+    populated when the requested symbol is the currently-held KD position -
+    it gives the chart the entry/stop reference lines to draw."""
+    if not price_history_db.is_ready():
+        raise HTTPException(status_code=503, detail="price history not configured (PG_DSN unset)")
+
+    symbol = symbol.upper()
+    bars = await price_history_db.get_ohlc_bars(symbol, limit=days)
+
+    position = await kd_watchlist._current_kd_position()
+    if position and position.get("symbol") == symbol:
+        position_out = {
+            "entry_price": position.get("entry_price"),
+            "stop_price": position.get("stop_price"),
+            "entry_date": position.get("entry_date"),
+        }
+    else:
+        position_out = None
+
+    return {"symbol": symbol, "bars": bars, "position": position_out}
 
 
 @router.get("/api/pnl/monthly")

@@ -92,6 +92,22 @@ async def get_recent_daily_bars(symbol: str, limit: int = 15) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+async def get_ohlc_bars(symbol: str, limit: int = 90) -> list[dict]:
+    """Most recent completed daily bars for `symbol`, oldest first, full OHLCV
+    - feeds the dashboard's per-position candlestick chart (app/routers/
+    dashboard.py's /api/candles/{symbol})."""
+    if _pool is None:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT trade_date, open, high, low, close, volume FROM price_history "
+            "WHERE symbol = $1 ORDER BY trade_date DESC LIMIT $2",
+            symbol,
+            limit,
+        )
+    return [dict(r) for r in reversed(rows)]
+
+
 async def fetch_all_daily_bars() -> list[dict]:
     """Every symbol's full daily-bar history, oldest first per symbol — the
     training set for app.core.kd_watchlist's golden/death-cross features."""

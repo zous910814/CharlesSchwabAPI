@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     # exit is also re-checked every monitor poll (~monitor_poll_seconds) off
     # today's still-forming bar, not just once a day off last night's close.
     kd_watchlist_enabled: bool = Field(True, env="KD_WATCHLIST_ENABLED")
+    # Pattern Day Trader guard: on a margin account under $25k equity, FINRA
+    # flags the account once it racks up more than this many day trades
+    # (same-symbol buy+sell same calendar day) in a rolling 5 business-day
+    # window - triggering a 90-day closing-only restriction. KD's own
+    # same-day intraday exit (death-cross, not a hard stop) is the only path
+    # in this app that can create one; see kd_watchlist._exit_kd_position's
+    # PDT guard. Schwab's account payload already tracks the rolling count
+    # itself (securitiesAccount.roundTrips), so this is just the threshold
+    # at which that path defers instead of firing - default leaves zero
+    # headroom past the 3 FINRA allows before the 4th trips the flag.
+    pdt_round_trip_limit: int = Field(3, env="PDT_ROUND_TRIP_LIMIT")
 
     class Config:
         case_sensitive = False

@@ -77,7 +77,7 @@ from sklearn.linear_model import LogisticRegression
 
 from app.clients.schwab import SchwabClient
 from app.core import activity_log, price_history_db
-from app.core.account import extract_buying_power, extract_position_qty, parse_positions
+from app.core.account import extract_buying_power, extract_position_qty, extract_round_trips, parse_positions
 from app.core.config import Settings
 from app.core.order_executor import submit_order
 from app.strategy.kd import compute_kd, kd_signal
@@ -93,6 +93,16 @@ ATR_WINDOW = 14
 VOLUME_BASELINE_DAYS = 20
 ATR_STOP_MULT = 2.0
 MIN_CLOSE_PRICE = 5.0
+
+# Floor on shares bought, checked against current buying power BEFORE
+# picking among same-day golden-cross candidates (see recommend_action).
+# The real capital-tiering lever for small accounts: on a ~$1,000 account,
+# a $400+ stock golden-crossing yields 1-2 shares even at BUY_ALLOCATION_PCT
+# - too coarse for the ATR stop to mean anything and impossible to exit
+# partially. % based sizing already scales correctly across account sizes
+# on its own; this just keeps it from picking a candidate too expensive for
+# the account to size sanely, when a cheaper alternative crossed the same day.
+MIN_SHARES = 3
 
 # Fraction of current buying power to spend on a single BUY, sized off
 # yesterday's close as a price ESTIMATE (a market order's real fill price
@@ -221,6 +231,39 @@ def train_cross_predictor(df: pd.DataFrame) -> Optional[LogisticRegression]:
     return model
 
 
+async def _pdt_guard(
+    settings: Settings, account: dict, position: dict, reason: str, trade_date: str,
+) -> Optional[dict]:
+    """Defers a same-day KD exit that would push the account over the PDT
+    round-trip limit, UNLESS reason is stop_hit - a hard price stop stays
+    protective-exits-are-never-blocked (matching monitor.py's blanket
+    stop-loss philosophy: losing more capital to dodge a PDT flag is worse
+    than the flag). Only death_cross can be deferred, because it's a signal
+    exit, not an immediate-loss-prevention one - the resting broker-side
+    stop order isn't cancelled while deferred, so real downside is still
+    covered; the position just holds one more day and recommend_action's
+    once-daily check (a different calendar day - never a day trade) gets
+    another shot at exiting it. Only fires same-day: entry and exit on
+    different days was never going to be a day trade in the first place."""
+    if reason == "stop_hit" or position.get("entry_date") != trade_date:
+        return None
+    round_trips = extract_round_trips(account)
+    if round_trips is None or round_trips < settings.pdt_round_trip_limit:
+        return None
+
+    symbol = position["symbol"]
+    already = await activity_log.fetch_events(event_type="kd_exit_deferred_pdt", symbol=symbol, limit=1)
+    if not (already and (already[0].get("detail") or {}).get("trade_date") == trade_date):
+        await activity_log.log_event(
+            event_type="kd_exit_deferred_pdt", symbol=symbol, status=reason,
+            detail={"round_trips": round_trips, "limit": settings.pdt_round_trip_limit, "trade_date": trade_date},
+        )
+    return {
+        "action": "HOLD", "symbol": symbol, "reason": "pdt_guard_deferred",
+        "would_have_exited_for": reason, "trade_date": trade_date,
+    }
+
+
 async def _exit_kd_position(
     settings: Settings, client: SchwabClient, account: dict, position: dict, reason: str, trade_date: str,
 ) -> dict:
@@ -228,6 +271,10 @@ async def _exit_kd_position(
     full held quantity. Shared by recommend_action's once-daily SELL branch
     and check_intraday_exit's faster same-day check, so both exit paths stay
     in sync instead of drifting apart."""
+    deferred = await _pdt_guard(settings, account, position, reason, trade_date)
+    if deferred is not None:
+        return deferred
+
     symbol = position["symbol"]
     shares = extract_position_qty(account, symbol)
     result = {"action": "SELL", "symbol": symbol, "reason": reason, "shares": shares, "trade_date": trade_date}
@@ -467,18 +514,32 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
     if candidates.empty:
         return {"action": "NONE", "trade_date": str(latest_date)}
 
-    chosen = candidates.iloc[0]
-    if len(candidates) > 1 and len(all_dates) > 1:
+    # `candidates` stays the FULL set of today's crosses for reporting
+    # (kd_entry's "candidates" field, the "other crosses not picked" LINE
+    # line) - `pool` is what's actually ranked/picked from, narrowed to
+    # what the account can size to MIN_SHARES.
+    buying_power = extract_buying_power(account)
+    pool = candidates
+    if buying_power:
+        # If NONE clear MIN_SHARES, fall through with the full set
+        # unfiltered so behavior for a too-small account is unchanged
+        # (resolves to "insufficient_buying_power" below, same as always).
+        affordable = candidates[np.floor((buying_power * BUY_ALLOCATION_PCT) / candidates["close"]) >= MIN_SHARES]
+        if not affordable.empty:
+            pool = affordable
+
+    chosen = pool.iloc[0]
+    if len(pool) > 1 and len(all_dates) > 1:
         model = train_cross_predictor(df[df["trade_date"] < latest_date])
         if model is not None:
             prior_day = all_dates[-2]
-            scored = df[(df["trade_date"] == prior_day) & df["symbol"].isin(candidates["symbol"])]
+            scored = df[(df["trade_date"] == prior_day) & df["symbol"].isin(pool["symbol"])]
             scored = scored.dropna(subset=PREDICT_FEATURE_COLUMNS)
             if not scored.empty:
                 scored = scored.copy()
                 scored["predicted_proba"] = model.predict_proba(scored[PREDICT_FEATURE_COLUMNS])[:, 1]
                 best_symbol = scored.sort_values("predicted_proba", ascending=False).iloc[0]["symbol"]
-                match = candidates[candidates["symbol"] == best_symbol]
+                match = pool[pool["symbol"] == best_symbol]
                 if not match.empty:
                     chosen = match.iloc[0]
 
@@ -495,7 +556,6 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
     stop_price = entry_price - ATR_STOP_MULT * float(atr)
     symbol = str(chosen["symbol"])
 
-    buying_power = extract_buying_power(account)
     shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / entry_price) if buying_power else 0
 
     result = {

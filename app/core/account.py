@@ -43,6 +43,15 @@ def extract_position_market_value(account: dict, symbol: str) -> float:
     return 0.0
 
 
+def extract_round_trips(account: dict) -> Optional[int]:
+    """Day trades in the trailing 5 rolling business days - what a margin
+    account's Pattern Day Trader flag counts against (FINRA flags the
+    account once this exceeds 3, i.e. on the 4th). Only meaningful on a
+    margin account under $25k equity; see kd_watchlist's PDT guard."""
+    value = (account.get("securitiesAccount") or {}).get("roundTrips")
+    return int(value) if isinstance(value, (int, float)) else None
+
+
 def extract_day_pl(account: dict) -> float:
     """Sum of today's floating P&L across currently open positions. Does not
     capture realized P&L from positions already closed earlier today — Schwab

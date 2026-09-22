@@ -20,9 +20,13 @@ LA_TZ = ZoneInfo("America/Los_Angeles")
 # covers both statuses it's ever logged with ("placed"/"error") - both are
 # worth a push, since it's the only place that reports whether a KD
 # position's protective stop actually made it to the broker (see
-# kd_watchlist.ensure_stop_order).
+# kd_watchlist.ensure_stop_order). "kd_exit_deferred_pdt" fires when a
+# death-cross exit was skipped to avoid tripping the Pattern Day Trader flag
+# (see kd_watchlist._pdt_guard) - the position is still held, unexpectedly,
+# so it's worth knowing about even though nothing went wrong.
 _ALWAYS_RISKY_EVENT_TYPES = {
-    "stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted", "kd_stop_placed",
+    "stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted",
+    "kd_stop_placed", "kd_exit_deferred_pdt",
 }
 
 
@@ -51,7 +55,7 @@ def format_risk_message(
 
     if isinstance(detail, dict):
         for key in ("reason", "r_multiple", "unrealized_pl_pct", "day_pl", "quantity", "phase",
-                    "stop_price", "stop_order_id"):
+                    "stop_price", "stop_order_id", "round_trips", "limit"):
             if key in detail and detail[key] is not None:
                 value = detail[key]
                 if isinstance(value, float):

@@ -13,6 +13,8 @@
     --text: #1b1b1f;
     --muted: #6b6b74;
     --accent: #3457d5;
+    --pos: #1a7f4b;
+    --neg: #b3261e;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -22,6 +24,8 @@
       --text: #ececef;
       --muted: #9a9aa2;
       --accent: #6f8bff;
+      --pos: #57d992;
+      --neg: #ff8a80;
     }
   }
   * { box-sizing: border-box; }
@@ -104,12 +108,8 @@
   .panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .panel-head .cash { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; line-height: 1.6; }
   .panel-head .cash strong { color: var(--text); font-variant-numeric: tabular-nums; }
-  .pl-pos { color: #1a7f4b; font-weight: 600; }
-  .pl-neg { color: #b3261e; font-weight: 600; }
-  @media (prefers-color-scheme: dark) {
-    .pl-pos { color: #57d992; }
-    .pl-neg { color: #ff8a80; }
-  }
+  .pl-pos { color: var(--pos); font-weight: 600; }
+  .pl-neg { color: var(--neg); font-weight: 600; }
   code.symbol { font-weight: 600; }
   details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
   pre {
@@ -124,8 +124,20 @@
     background: var(--panel); color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer;
   }
   .tab-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
+  .tab-btn.sm { padding: 4px 10px; font-size: 12px; }
+  .period-btns { display: flex; gap: 4px; }
   .pnl-total { font-size: 13px; color: var(--muted); margin-left: auto; }
   .pnl-total strong { font-variant-numeric: tabular-nums; }
+  .chart-wrap { position: relative; }
+  #pnl-chart { width: 100%; height: 220px; display: block; touch-action: none; }
+  #pnl-chart:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pnl-tooltip {
+    position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    white-space: nowrap; z-index: 2;
+  }
+  .pnl-tooltip .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pnl-tooltip .d { color: var(--muted); font-size: 11px; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -139,15 +151,33 @@
   </div>
 
   <div id="page-pnl" hidden>
+    <div class="toolbar">
+      <span class="panel-title" style="margin:0">Period</span>
+      <div class="period-btns" id="pnl-period">
+        <button class="tab-btn sm" data-period="1m" type="button">1M</button>
+        <button class="tab-btn sm" data-period="3m" type="button">3M</button>
+        <button class="tab-btn sm active" data-period="6m" type="button">6M</button>
+        <button class="tab-btn sm" data-period="1y" type="button">1Y</button>
+        <button class="tab-btn sm" data-period="all" type="button">ALL</button>
+      </div>
+      <span class="pnl-total">Period realized: <strong id="pnl-total">—</strong></span>
+    </div>
+
     <div class="panel">
       <div class="panel-head">
+        <span class="panel-title" style="margin:0">Cumulative Realized P&amp;L</span>
+      </div>
+      <div class="chart-wrap" id="pnl-chart-wrap">
+        <svg id="pnl-chart" viewBox="0 0 760 220" preserveAspectRatio="none" tabindex="0" role="img"
+             aria-label="Cumulative realized profit and loss for the selected period"></svg>
+        <div class="pnl-tooltip" id="pnl-tooltip" hidden></div>
+      </div>
+      <div id="pnl-chart-empty" class="empty" hidden>No closed trades in this period yet.</div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <div class="panel-head">
         <span class="panel-title" style="margin:0">Realized P&amp;L by Month</span>
-        <select id="pnl-months">
-          <option value="6">Last 6 months</option>
-          <option value="12" selected>Last 12 months</option>
-          <option value="24">Last 24 months</option>
-        </select>
-        <span class="pnl-total">Total realized: <strong id="pnl-total">—</strong></span>
       </div>
       <table>
         <thead>
@@ -159,7 +189,7 @@
         </thead>
         <tbody id="pnl-rows"></tbody>
       </table>
-      <div id="pnl-empty" class="empty" hidden>No closed trades in this window yet.</div>
+      <div id="pnl-empty" class="empty" hidden>No closed trades in this period yet.</div>
     </div>
   </div>
 
@@ -429,11 +459,18 @@
   const tabPnl = document.getElementById('tab-pnl');
   const pageDashboard = document.getElementById('page-dashboard');
   const pagePnl = document.getElementById('page-pnl');
-  const pnlMonths = document.getElementById('pnl-months');
   const pnlRows = document.getElementById('pnl-rows');
   const pnlEmpty = document.getElementById('pnl-empty');
   const pnlTotal = document.getElementById('pnl-total');
+  const pnlPeriodBtns = document.querySelectorAll('#pnl-period .tab-btn');
+  const pnlChartWrap = document.getElementById('pnl-chart-wrap');
+  const pnlSvg = document.getElementById('pnl-chart');
+  const pnlTooltip = document.getElementById('pnl-tooltip');
+  const pnlChartEmpty = document.getElementById('pnl-chart-empty');
   let pnlLoaded = false;
+  let pnlData = null;
+  let pnlPeriod = '6m';
+  let pnlPoints = [];
 
   function showTab(name) {
     const onPnl = name === 'pnl';
@@ -446,7 +483,195 @@
   tabDashboard.addEventListener('click', () => showTab('dashboard'));
   tabPnl.addEventListener('click', () => showTab('pnl'));
 
-  function renderPnlRow(m) {
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  // Trailing lookback windows, rebased to $0 at the start of the window -
+  // matches how the "1M/3M/6M" toggle reads on a brokerage performance chart.
+  function periodCutoff(period) {
+    if (period === 'all') return null;
+    const d = new Date();
+    if (period === '1m') d.setMonth(d.getMonth() - 1);
+    else if (period === '3m') d.setMonth(d.getMonth() - 3);
+    else if (period === '6m') d.setMonth(d.getMonth() - 6);
+    else if (period === '1y') d.setFullYear(d.getFullYear() - 1);
+    return d;
+  }
+
+  function niceStep(rough) {
+    const exp = Math.floor(Math.log10(rough || 1));
+    const base = Math.pow(10, exp);
+    const frac = rough / base;
+    const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+    return niceFrac * base;
+  }
+
+  function computeTicks(min, max, targetCount) {
+    if (min === max) { min -= 1; max += 1; }
+    const step = niceStep((max - min) / targetCount) || 1;
+    const start = Math.ceil(min / step) * step;
+    const ticks = [];
+    for (let v = start; v <= max + 1e-9; v += step) ticks.push(Math.round(v * 100) / 100);
+    if (min <= 0 && max >= 0 && !ticks.includes(0)) ticks.push(0);
+    return ticks.sort((a, b) => a - b);
+  }
+
+  function fmtAxis(v) {
+    return v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  }
+
+  function fmtDateShort(d) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function renderPnlChart(points) {
+    pnlPoints = points;
+    if (!points.length) {
+      pnlSvg.innerHTML = '';
+      pnlChartEmpty.hidden = false;
+      pnlTooltip.hidden = true;
+      return;
+    }
+    pnlChartEmpty.hidden = true;
+
+    const W = 760, H = 220;
+    const padL = 60, padR = 14, padT = 16, padB = 26;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    const values = points.map(p => p.value);
+    let yMin = Math.min(0, ...values), yMax = Math.max(0, ...values);
+    const yPad = (yMax - yMin) * 0.12 || 10;
+    yMin -= yPad; yMax += yPad;
+
+    const minTime = points[0].date.getTime();
+    const maxTime = points[points.length - 1].date.getTime();
+    const xScale = t => (minTime === maxTime ? padL + plotW / 2 : padL + ((t - minTime) / (maxTime - minTime)) * plotW);
+    const yScale = v => padT + ((yMax - v) / (yMax - yMin)) * plotH;
+    pnlSvg._scaleX = xScale;
+    pnlSvg._scaleY = yScale;
+    pnlSvg._W = W;
+    pnlSvg._H = H;
+
+    const posColor = cssVar('--pos', '#1a7f4b');
+    const negColor = cssVar('--neg', '#b3261e');
+    const gridColor = cssVar('--border', '#e2e2e6');
+    const mutedColor = cssVar('--muted', '#6b6b74');
+    const panelColor = cssVar('--panel', '#ffffff');
+
+    const ticks = computeTicks(yMin, yMax, 4);
+    const zeroY = yScale(0);
+
+    let svg = '';
+    ticks.forEach(t => {
+      const y = yScale(t);
+      svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${gridColor}" stroke-width="1" shape-rendering="crispEdges" />`;
+      svg += `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="${mutedColor}">${esc(fmtAxis(t))}</text>`;
+    });
+
+    const tickCount = Math.min(5, points.length);
+    const xIdxs = new Set();
+    for (let i = 0; i < tickCount; i++) xIdxs.add(Math.round((i * (points.length - 1)) / Math.max(1, tickCount - 1)));
+    [...xIdxs].forEach(i => {
+      const p = points[i];
+      const x = xScale(p.date.getTime());
+      svg += `<text x="${x}" y="${H - 6}" text-anchor="middle" font-size="10" fill="${mutedColor}">${esc(fmtDateShort(p.date))}</text>`;
+    });
+
+    const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(p.date.getTime())},${yScale(p.value)}`).join(' ');
+    const areaD = `${pathD} L${xScale(maxTime)},${zeroY} L${xScale(minTime)},${zeroY} Z`;
+
+    // Diverging above/below the $0 baseline: two clip regions so one line/area
+    // pair reads green above and red below, instead of a single hue that can't
+    // show polarity.
+    svg += `<clipPath id="pnl-clip-above"><rect x="0" y="0" width="${W}" height="${Math.max(0, zeroY)}" /></clipPath>`;
+    svg += `<clipPath id="pnl-clip-below"><rect x="0" y="${zeroY}" width="${W}" height="${Math.max(0, H - zeroY)}" /></clipPath>`;
+    svg += `<path d="${areaD}" fill="${posColor}" opacity="0.1" clip-path="url(#pnl-clip-above)" />`;
+    svg += `<path d="${areaD}" fill="${negColor}" opacity="0.1" clip-path="url(#pnl-clip-below)" />`;
+    svg += `<path d="${pathD}" fill="none" stroke="${posColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#pnl-clip-above)" />`;
+    svg += `<path d="${pathD}" fill="none" stroke="${negColor}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#pnl-clip-below)" />`;
+
+    if (yMin <= 0 && yMax >= 0) {
+      svg += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="${gridColor}" stroke-width="1" shape-rendering="crispEdges" />`;
+    }
+
+    const last = points[points.length - 1];
+    const lastColor = last.value >= 0 ? posColor : negColor;
+    const lx = xScale(last.date.getTime()), ly = yScale(last.value);
+    svg += `<circle cx="${lx}" cy="${ly}" r="5" fill="${lastColor}" stroke="${panelColor}" stroke-width="2" />`;
+    const labelEnd = lx > W - padR - 70;
+    svg += `<text x="${labelEnd ? lx - 10 : lx + 10}" y="${ly - 8}" text-anchor="${labelEnd ? 'end' : 'start'}" font-size="11" font-weight="700" fill="${lastColor}">${esc(fmtMoney(last.value))}</text>`;
+
+    svg += `<line id="pnl-crosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="${mutedColor}" stroke-width="1" opacity="0" />`;
+    svg += `<circle id="pnl-hover-dot" r="4" fill="${mutedColor}" stroke="${panelColor}" stroke-width="2" opacity="0" />`;
+    svg += `<rect id="pnl-hit" x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="transparent" />`;
+
+    pnlSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    pnlSvg.innerHTML = svg;
+  }
+
+  function pnlNearestIndex(clientX) {
+    const rect = pnlSvg.getBoundingClientRect();
+    const svgX = ((clientX - rect.left) / rect.width) * pnlSvg._W;
+    let best = 0, bestDist = Infinity;
+    pnlPoints.forEach((p, i) => {
+      const dist = Math.abs(pnlSvg._scaleX(p.date.getTime()) - svgX);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    });
+    return best;
+  }
+
+  function pnlShowTooltip(index) {
+    const p = pnlPoints[index];
+    if (!p) return;
+    pnlSvg._focusIndex = index;
+    const x = pnlSvg._scaleX(p.date.getTime());
+    const y = pnlSvg._scaleY(p.value);
+    const crosshair = document.getElementById('pnl-crosshair');
+    const hoverDot = document.getElementById('pnl-hover-dot');
+    if (crosshair) { crosshair.setAttribute('x1', x); crosshair.setAttribute('x2', x); crosshair.setAttribute('opacity', '1'); }
+    if (hoverDot) { hoverDot.setAttribute('cx', x); hoverDot.setAttribute('cy', y); hoverDot.setAttribute('opacity', '1'); }
+
+    const t = p.trade;
+    pnlTooltip.innerHTML = `<div class="v ${p.value >= 0 ? 'pl-pos' : 'pl-neg'}">${esc(fmtMoney(p.value))}</div>` +
+      `<div class="d">${esc(fmtDateShort(p.date))}${t ? ' · ' + esc(t.symbol) + ' ' + esc(fmtMoney(t.realized_pnl)) : ''}</div>`;
+    pnlTooltip.hidden = false;
+
+    const wrapRect = pnlChartWrap.getBoundingClientRect();
+    const svgRect = pnlSvg.getBoundingClientRect();
+    const px = svgRect.left - wrapRect.left + (x / pnlSvg._W) * svgRect.width;
+    const py = svgRect.top - wrapRect.top + (y / pnlSvg._H) * svgRect.height;
+    pnlTooltip.style.left = `${Math.max(0, Math.min(px + 12, wrapRect.width - 150))}px`;
+    pnlTooltip.style.top = `${Math.max(0, py - 44)}px`;
+  }
+
+  function pnlHideTooltip() {
+    pnlTooltip.hidden = true;
+    const crosshair = document.getElementById('pnl-crosshair');
+    const hoverDot = document.getElementById('pnl-hover-dot');
+    if (crosshair) crosshair.setAttribute('opacity', '0');
+    if (hoverDot) hoverDot.setAttribute('opacity', '0');
+  }
+
+  pnlSvg.addEventListener('pointermove', e => { if (pnlPoints.length) pnlShowTooltip(pnlNearestIndex(e.clientX)); });
+  pnlSvg.addEventListener('pointerleave', pnlHideTooltip);
+  pnlSvg.addEventListener('focus', () => { if (pnlPoints.length) pnlShowTooltip(pnlPoints.length - 1); });
+  pnlSvg.addEventListener('blur', pnlHideTooltip);
+  pnlSvg.addEventListener('keydown', e => {
+    if (!pnlPoints.length) return;
+    const current = pnlSvg._focusIndex ?? pnlPoints.length - 1;
+    if (e.key === 'ArrowLeft') { pnlShowTooltip(Math.max(0, current - 1)); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { pnlShowTooltip(Math.min(pnlPoints.length - 1, current + 1)); e.preventDefault(); }
+  });
+
+  function flattenTrades(months) {
+    const out = [];
+    months.forEach(m => (m.trades || []).forEach(t => out.push(t)));
+    return out;
+  }
+
+  function renderPnlMonthRow(m) {
     const plClass = m.realized_pnl >= 0 ? 'pl-pos' : 'pl-neg';
     return `<tr>
       <td>${esc(m.month)}</td>
@@ -455,29 +680,53 @@
     </tr>`;
   }
 
+  function renderPnlPeriod() {
+    if (!pnlData) return;
+    const cutoff = periodCutoff(pnlPeriod);
+    const allTrades = flattenTrades(pnlData.months).filter(t => t.closed_at);
+    const trades = cutoff ? allTrades.filter(t => new Date(t.closed_at) >= cutoff) : allTrades;
+
+    let running = 0;
+    const points = trades.map(t => { running += t.realized_pnl; return { date: new Date(t.closed_at), value: running, trade: t }; });
+    renderPnlChart(points);
+
+    const cutoffKey = cutoff ? cutoff.toISOString().slice(0, 7) : null;
+    const months = cutoffKey ? pnlData.months.filter(m => m.month >= cutoffKey) : pnlData.months;
+    if (!months.length) {
+      pnlRows.innerHTML = '';
+      pnlEmpty.hidden = false;
+    } else {
+      pnlEmpty.hidden = true;
+      pnlRows.innerHTML = months.slice().reverse().map(renderPnlMonthRow).join('');
+    }
+
+    const periodTotal = points.length ? points[points.length - 1].value : 0;
+    pnlTotal.textContent = fmtMoney(periodTotal);
+    pnlTotal.className = periodTotal >= 0 ? 'pl-pos' : 'pl-neg';
+  }
+
   async function loadPnl() {
     try {
-      const res = await fetch(`/api/pnl/monthly?months=${pnlMonths.value}`);
+      // Fetched once per tab visit (the endpoint's max) and cached; the period
+      // buttons below just re-slice/re-render this client-side - no refetch.
+      const res = await fetch('/api/pnl/monthly?months=60');
       if (!res.ok) throw new Error(res.status);
-      const data = await res.json();
+      pnlData = await res.json();
       pnlLoaded = true;
-
-      const months = data.months || [];
-      if (!months.length) {
-        pnlRows.innerHTML = '';
-        pnlEmpty.hidden = false;
-      } else {
-        pnlEmpty.hidden = true;
-        pnlRows.innerHTML = months.slice().reverse().map(renderPnlRow).join('');
-      }
-      pnlTotal.textContent = fmtMoney(data.total_realized_pnl);
-      pnlTotal.className = data.total_realized_pnl >= 0 ? 'pl-pos' : 'pl-neg';
+      renderPnlPeriod();
     } catch (e) {
       pnlTotal.textContent = 'unavailable';
     }
   }
 
-  pnlMonths.addEventListener('change', loadPnl);
+  pnlPeriodBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      pnlPeriodBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      pnlPeriod = btn.dataset.period;
+      renderPnlPeriod();
+    });
+  });
 </script>
 </body>
 </html>

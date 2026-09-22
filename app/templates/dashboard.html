@@ -716,9 +716,21 @@
     else if (e.key === 'ArrowRight') { candleShowTooltip(Math.min(candleBars.length - 1, current + 1)); e.preventDefault(); }
   });
 
+  let candleTimer = null;
+
   function scheduleAutoRefresh() {
     if (timer) clearInterval(timer);
-    if (fAuto.checked) timer = setInterval(() => { load(); loadMonitor(); loadPortfolio(); }, 5000);
+    if (candleTimer) clearInterval(candleTimer);
+    if (fAuto.checked) {
+      timer = setInterval(() => { load(); loadMonitor(); loadPortfolio(); }, 5000);
+      // Daily bars don't need 5s polling, but a long-lived tab should still
+      // pick up the next day's backfill (or a same-symbol re-entry's new
+      // entry/stop) without a manual reload.
+      candleTimer = setInterval(() => {
+        const sym = chartSymbolInput.value.trim().toUpperCase();
+        if (sym) loadCandles(sym);
+      }, 5 * 60 * 1000);
+    }
   }
 
   [fSymbol, fStatus, fEvent].forEach(el => el.addEventListener('change', load));

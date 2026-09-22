@@ -102,7 +102,7 @@ MIN_CLOSE_PRICE = 5.0
 # partially. % based sizing already scales correctly across account sizes
 # on its own; this just keeps it from picking a candidate too expensive for
 # the account to size sanely, when a cheaper alternative crossed the same day.
-MIN_SHARES = 3
+MIN_SHARES = 2
 
 # Fraction of current buying power to spend on a single BUY, sized off
 # yesterday's close as a price ESTIMATE (a market order's real fill price

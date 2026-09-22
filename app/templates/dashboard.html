@@ -697,7 +697,7 @@
     const changeClass = change >= 0 ? 'pl-pos' : 'pl-neg';
     candleTooltip.innerHTML =
       `<div class="v ${changeClass}">${esc(fmtMoney(b.close))}</div>` +
-      `<div class="d">${esc(fmtDateShort(parseTradeDate(b.trade_date)))} · O ${esc(fmtMoney(b.open))} H ${esc(fmtMoney(b.high))} L ${esc(fmtMoney(b.low))}</div>`;
+      `<div class="d">${esc(fmtDateShort(parseTradeDate(b.trade_date)))} · H ${esc(fmtMoney(b.high))} L ${esc(fmtMoney(b.low))}</div>`;
     candleTooltip.hidden = false;
 
     const wrapRect = candleChartWrap.getBoundingClientRect();

@@ -866,12 +866,27 @@
       svg += `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="${mutedColor}">${esc(fmtAxis(t))}</text>`;
     });
 
+    // Candidate ticks are spread evenly by index, but points aren't evenly
+    // spaced in time (e.g. one trade in January, three within days of each
+    // other in September) - picking every candidate regardless of its actual
+    // pixel position let time-clustered labels render on top of each other.
+    // The last point's label is always shown (it lines up with the
+    // highlighted last-value dot/callout), so every other candidate is also
+    // rejected if it would collide with that fixed label, not just with
+    // whichever label was drawn immediately before it.
     const tickCount = Math.min(5, points.length);
-    const xIdxs = new Set();
-    for (let i = 0; i < tickCount; i++) xIdxs.add(Math.round((i * (points.length - 1)) / Math.max(1, tickCount - 1)));
-    [...xIdxs].forEach(i => {
+    const candidateIdxs = [...new Set(Array.from({ length: tickCount }, (_, i) =>
+      Math.round((i * (points.length - 1)) / Math.max(1, tickCount - 1))))];
+    const lastIdx = points.length - 1;
+    const lastLabelX = xScale(points[lastIdx].date.getTime());
+    const minLabelGap = 48;
+    let prevLabelX = -Infinity;
+    candidateIdxs.forEach(i => {
       const p = points[i];
       const x = xScale(p.date.getTime());
+      const isLast = i === lastIdx;
+      if (!isLast && (x - prevLabelX < minLabelGap || lastLabelX - x < minLabelGap)) return;
+      prevLabelX = x;
       svg += `<text x="${x}" y="${H - 6}" text-anchor="middle" font-size="10" fill="${mutedColor}">${esc(fmtDateShort(p.date))}</text>`;
     });
 

@@ -186,7 +186,16 @@ async def run_daily_forever() -> None:
         return
     while True:
         await asyncio.sleep(_seconds_until_next_run(settings))
-        today = datetime.now(MARKET_TZ).date().isoformat()
+        now = datetime.now(MARKET_TZ)
+        if now.weekday() >= 5:
+            # No trading Sat/Sun, so the most recent daily bar (and thus any
+            # golden-cross signal) is unchanged from Friday's close - running
+            # anyway just re-submits the same BUY recommend_action already
+            # tried on the prior weekend day, duplicating a real (rejected or
+            # not) broker order for no new information. Same Mon-Fri check
+            # monitor.is_market_open uses.
+            continue
+        today = now.date().isoformat()
         if STATE.get("last_run_date") == today:
             continue
         try:

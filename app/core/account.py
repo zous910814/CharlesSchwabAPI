@@ -5,8 +5,16 @@ from typing import Optional
 
 def extract_buying_power(account: dict) -> Optional[float]:
     balances = (account.get("securitiesAccount") or {}).get("currentBalances") or {}
-    # Field name depends on account type (margin vs cash); try the common ones.
-    for key in ("buyingPower", "cashAvailableForTrading", "availableFunds", "cashBalance"):
+    # cashAvailableForTrading checked first, not buyingPower: this account is
+    # margin-enabled but under Reg T's $2000 minimum equity to actually use
+    # margin, so Schwab's own buyingPower field still reports a margin-sized
+    # (2x) figure it will then reject at order time - "accounts with less
+    # than $2000 equity value may only place trades for the amount of cash in
+    # the account." Sizing off buyingPower here duplicated that rejection
+    # every run since the position never actually filled. No feature in this
+    # codebase wants margin sizing, so cash-only is preferred unconditionally,
+    # not just under $2000 equity.
+    for key in ("cashAvailableForTrading", "buyingPower", "availableFunds", "cashBalance"):
         value = balances.get(key)
         if isinstance(value, (int, float)):
             return float(value)

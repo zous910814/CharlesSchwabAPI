@@ -48,6 +48,12 @@ async def _fetch_trade_transactions(
 def _equity_leg(transaction: dict) -> Optional[dict]:
     for item in transaction.get("transferItems") or []:
         instrument = item.get("instrument") or {}
+        # Fee/commission legs are CURRENCY_USD transfers with a nonzero amount
+        # too (e.g. SEC fee), so filtering on symbol truthiness alone picks a
+        # fee leg over the real equity leg on a partial-filled order - which
+        # silently drops that transaction's proceeds from the pairing below.
+        if instrument.get("assetType") == "CURRENCY":
+            continue
         if instrument.get("symbol") and item.get("amount") not in (None, 0):
             return item
     return None
@@ -55,8 +61,17 @@ def _equity_leg(transaction: dict) -> Optional[dict]:
 
 def _closed_trades(transactions: list[dict]) -> list[dict]:
     """Pair each symbol's accumulated opening cost against its closing
-    transaction; returns one entry per closed round trip."""
+    transaction(s); returns one entry per closed round trip.
+
+    A single order (e.g. a stop hit) can fill across multiple partial-fill
+    CLOSING transactions, so closing proceeds are accumulated and the round
+    trip is only settled once the tracked open quantity returns to zero -
+    settling on the first CLOSING transaction would misattribute later
+    partial fills of the same exit as brand-new, cost-basis-free trades.
+    """
     open_cost: dict[str, float] = {}
+    open_qty: dict[str, float] = {}
+    closing_proceeds: dict[str, float] = {}
     closed: list[dict] = []
 
     for txn in transactions:
@@ -69,17 +84,24 @@ def _closed_trades(transactions: list[dict]) -> list[dict]:
         if not symbol:
             continue
         net_amount = txn.get("netAmount")
-        if not isinstance(net_amount, (int, float)):
+        leg_qty = leg.get("amount")
+        if not isinstance(net_amount, (int, float)) or not isinstance(leg_qty, (int, float)):
             continue
 
         position_effect = leg.get("positionEffect")
-        is_opening = position_effect == "OPENING" if position_effect else float(leg["amount"]) > 0
+        is_opening = position_effect == "OPENING" if position_effect else leg_qty > 0
 
         if is_opening:
             open_cost[symbol] = open_cost.get(symbol, 0.0) + float(net_amount)
+            open_qty[symbol] = open_qty.get(symbol, 0.0) + abs(float(leg_qty))
         else:
-            realized = float(net_amount) + open_cost.pop(symbol, 0.0)
+            closing_proceeds[symbol] = closing_proceeds.get(symbol, 0.0) + float(net_amount)
+            open_qty[symbol] = open_qty.get(symbol, 0.0) - abs(float(leg_qty))
+            if open_qty[symbol] > 1e-6:
+                continue  # more partial fills still expected for this exit
             when = txn.get("tradeDate") or txn.get("time")
+            realized = closing_proceeds.pop(symbol, 0.0) + open_cost.pop(symbol, 0.0)
+            open_qty.pop(symbol, None)
             closed.append({"symbol": symbol, "realized_pnl": realized, "closed_at": when})
 
     return closed

@@ -100,9 +100,12 @@ def _closed_trades(transactions: list[dict]) -> list[dict]:
             if open_qty[symbol] > 1e-6:
                 continue  # more partial fills still expected for this exit
             when = txn.get("tradeDate") or txn.get("time")
-            realized = closing_proceeds.pop(symbol, 0.0) + open_cost.pop(symbol, 0.0)
+            cost = open_cost.pop(symbol, 0.0)
+            realized = closing_proceeds.pop(symbol, 0.0) + cost
             open_qty.pop(symbol, None)
-            closed.append({"symbol": symbol, "realized_pnl": realized, "closed_at": when})
+            # cost_basis lets the dashboard show a per-month return %; it's 0 when
+            # the opening leg predates the fetched window (no basis -> no return).
+            closed.append({"symbol": symbol, "realized_pnl": realized, "closed_at": when, "cost_basis": abs(cost)})
 
     return closed
 

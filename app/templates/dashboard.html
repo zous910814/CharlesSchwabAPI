@@ -6,206 +6,318 @@
 <title>KD Swing · Schwab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  [hidden] { display: none !important; }
   :root {
     color-scheme: light dark;
-    --font-display: 'Space Grotesk', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
-    --font-body: -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-display: 'Inter', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+    --font-body: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
     --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', 'JetBrains Mono', Consolas, monospace;
-    --bg: #f4f3ef;
+    --bg: #f4f5f7;
+    --glow: rgba(196, 207, 226, .45);
     --panel: #ffffff;
-    --border: #e1ddd2;
-    --text: #1c1c1a;
-    --muted: #6b6a63;
-    --accent: #96701f;
+    --panel-2: #f1f3f6;
+    --border: #e0e3ea;
+    --text: #141821;
+    --muted: #667085;
+    --accent: #a8741a;
     --accent-ink: #ffffff;
     --pos: #b23324;
     --neg: #1f7a46;
     --danger: #b23324;
+    --ok: #1a7f4b;
+    --ok-bg: #e3f9ec;
+    --warn: #a15c00;
+    --warn-bg: #fff4e0;
+    --bad-bg: #fdeaea;
+    --info: #3457d5;
+    --info-bg: #eef1fd;
+    --chip-bg: #eceef3;
+    --chip-fg: #58585f;
+    --k-color: #1d6fd6;
+    --d-color: #8a3fd1;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0b0e14;
-      --panel: #11151d;
-      --border: #232838;
-      --text: #e7e9ee;
-      --muted: #8b93a5;
-      --accent: #c9973f;
+      --bg: #090d14;
+      --glow: rgba(23, 33, 49, .42);
+      --panel: #0e141d;
+      --panel-2: #141b27;
+      --border: #222b39;
+      --text: #eef2f8;
+      --muted: #8792a5;
+      --accent: #e4a949;
       --accent-ink: #1a1206;
       --pos: #e2685c;
       --neg: #4fb473;
       --danger: #e2685c;
+      --ok: #57d992;
+      --ok-bg: #10281d;
+      --warn: #ffc670;
+      --warn-bg: #33270f;
+      --bad-bg: #3a1616;
+      --info: #9db1ff;
+      --info-bg: #232852;
+      --chip-bg: #1a2230;
+      --chip-fg: #a9b3c5;
+      --k-color: #5aa9ff;
+      --d-color: #c58bff;
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    padding: 28px 20px 40px;
-    background: var(--bg);
+    padding: 32px 36px 48px;
+    background: radial-gradient(ellipse 122% 112% at 78% 12%, var(--glow) 0%, transparent 41%), var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     font: 14px/1.5 var(--font-body);
   }
-  .wrap { max-width: 1320px; margin: 0 auto; }
-  h1 { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 2px; }
-  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13px; max-width: 62ch; }
-  .toolbar {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    margin-bottom: 14px; padding: 10px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 6px;
-  }
-  .toolbar input, .toolbar select {
-    padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 13px; font-family: var(--font-body);
-  }
-  .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
-  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #999; margin-left: auto; }
-  .status-dot.live { background: #2ecc71; animation: dot-pulse 2.2s ease-in-out infinite; }
-  @keyframes dot-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(46,204,113,.35); }
-    50% { box-shadow: 0 0 0 5px rgba(46,204,113,0); }
-  }
-  @media (prefers-reduced-motion: reduce) { .status-dot.live { animation: none; } }
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  thead th {
-    text-align: left; font-size: 12px; font-weight: 600;
-    color: var(--muted); padding: 9px 10px; border-bottom: 1px solid var(--border);
-  }
-  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  tbody tr:last-child td { border-bottom: none; }
-  tbody tr:hover { background: rgba(127,127,127,.06); }
-  .badge {
-    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
-    background: #f1f1f4; color: #58585f;
-  }
-  @media (prefers-color-scheme: dark) {
-    .badge { background: #2c2c31; color: #b5b5bd; }
-  }
-  .badge.success { background: #e3f9ec; color: #1a7f4b; }
-  .badge.failed, .badge.error { background: #fdeaea; color: #b3261e; }
-  .badge.dry_run { background: #eef1fd; color: #3457d5; }
-  .badge.sent { background: #fff4e0; color: #a15c00; }
-  .badge.skipped { background: #f1f1f4; color: #58585f; }
-  .badge.BUY { background: #e3f9ec; color: #1a7f4b; }
-  .badge.SELL { background: #fdeaea; color: #b3261e; }
-  .badge.HOLD { background: #f1f1f4; color: #58585f; }
-  @media (prefers-color-scheme: dark) {
-    .badge.success { background: #113322; color: #57d992; }
-    .badge.failed, .badge.error { background: #3a1616; color: #ff8a80; }
-    .badge.dry_run { background: #232852; color: #9db1ff; }
-    .badge.sent { background: #3a2c0f; color: #ffc670; }
-    .badge.skipped { background: #2c2c31; color: #b5b5bd; }
-    .badge.BUY { background: #113322; color: #57d992; }
-    .badge.SELL { background: #3a1616; color: #ff8a80; }
-    .badge.HOLD { background: #2c2c31; color: #b5b5bd; }
-  }
-  .panel-title { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0 0 10px; }
-  .market-badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-  .market-badge.open { background: #e3f9ec; color: #1a7f4b; }
-  .market-badge.closed { background: #f1f1f4; color: #58585f; }
-  .market-badge.tripped { background: #fdeaea; color: #b3261e; }
-  @media (prefers-color-scheme: dark) {
-    .market-badge.open { background: #113322; color: #57d992; }
-    .market-badge.closed { background: #2c2c31; color: #b5b5bd; }
-    .market-badge.tripped { background: #3a1616; color: #ff8a80; }
-  }
-  .btn {
-    padding: 5px 12px; border-radius: 4px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer;
-  }
-  .btn:hover { border-color: var(--muted); }
-  .btn.paused { background: #fdeaea; color: #b3261e; border-color: transparent; }
-  @media (prefers-color-scheme: dark) {
-    .btn.paused { background: #3a1616; color: #ff8a80; }
-  }
-  .monitor-meta { color: var(--muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1240px; margin: 0 auto; }
   .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-  .grid-2col { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }
-  @media (min-width: 760px) { .grid-2col { grid-template-columns: 1fr 1fr; align-items: start; } }
-  .board-grid {
-    display: grid; gap: 14px; margin-bottom: 14px;
-    grid-template-columns: 1fr; grid-template-areas: "portfolio" "monitor" "chart";
-  }
-  @media (min-width: 760px) {
-    .board-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "portfolio monitor" "chart chart"; align-items: start; }
-  }
-  @media (min-width: 1080px) {
-    .board-grid { grid-template-columns: 1fr 1fr 1.3fr; grid-template-areas: "portfolio monitor chart"; }
-  }
-  .board-portfolio { grid-area: portfolio; }
-  .board-monitor { grid-area: monitor; }
-  .board-chart { grid-area: chart; }
-  .chart-symbol-input {
-    margin-left: auto; width: 84px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 12px;
-    text-transform: uppercase;
-  }
-  .chart-last { font-size: 12px; color: var(--muted); font-family: var(--font-mono); margin-right: 8px; white-space: nowrap; }
-  #candle-chart { width: 100%; height: 280px; display: block; touch-action: none; }
-  #candle-chart:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--border);
-    border-radius: 6px; padding: 14px; transition: border-left-color .3s;
-  }
-  .panel.panel-live { border-left-color: var(--accent); }
-  .panel.panel-alert { border-left-color: var(--danger); }
-  .panel.panel-paused { border-left-color: var(--muted); }
-  .panel table { border: none; border-radius: 0; }
-  .panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .panel-head .cash { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; line-height: 1.6; }
-  .panel-head .cash strong { color: var(--text); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .label { font-size: 11.5px; color: var(--muted); }
+  .eyebrow { font-size: 10.9px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); line-height: 16px; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.amber { background: var(--accent); }
+  .dot.green { background: #2ecc71; }
   .pl-pos { color: var(--pos); font-weight: 600; }
   .pl-neg { color: var(--neg); font-weight: 600; }
   code.symbol { font-family: var(--font-mono); font-weight: 600; }
-  details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
-  pre {
-    margin: 6px 0 0; padding: 8px; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 4px; font-family: var(--font-mono); font-size: 11px; max-width: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+
+  /* ---- Top bar ---- */
+  .topbar {
+    display: grid; grid-template-columns: 1fr auto 1fr; grid-template-areas: "brand tabs status";
+    align-items: end; column-gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border);
   }
-  .empty { text-align: center; padding: 40px; color: var(--muted); }
-  .ts { white-space: nowrap; color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
-  .tabs { display: flex; gap: 22px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .brand { grid-area: brand; padding-bottom: 22px; }
+  .brand h1 { font-family: var(--font-display); font-size: 23px; line-height: 35px; font-weight: 650; letter-spacing: -.01em; margin: 5px 0 0; }
+  .tabs { grid-area: tabs; display: flex; gap: 24px; }
   .tabs .tab-btn {
-    padding: 6px 2px 10px; margin-bottom: -1px; border: none; border-bottom: 2px solid transparent;
+    padding: 10px 2px 12px; margin-bottom: -1px; border: none; border-bottom: 2px solid transparent;
     border-radius: 0; background: transparent; color: var(--muted); font-family: var(--font-display);
-    font-size: 14px; font-weight: 600; cursor: pointer;
+    font-size: 13.6px; font-weight: 500; cursor: pointer;
   }
   .tabs .tab-btn:hover { color: var(--text); }
   .tabs .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
-  .period-btns { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .period-btns .tab-btn.sm {
-    padding: 5px 12px; border: none; border-right: 1px solid var(--border); border-radius: 0;
-    background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+  .market-status { grid-area: status; justify-self: end; padding-bottom: 26px; }
+  .market-badge { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .market-badge .dot { background: var(--muted); }
+  .market-badge.open { color: var(--text); }
+  .market-badge.open .dot { background: #2ecc71; box-shadow: 0 0 0 3px rgba(46,204,113,.18); }
+
+  /* ---- Cards / board ---- */
+  .board { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 16px; align-items: stretch; }
+  .col-side, .col-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card, .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px;
   }
-  .period-btns .tab-btn.sm:last-child { border-right: none; }
-  .period-btns .tab-btn.sm.active { background: var(--accent); color: var(--accent-ink); }
-  .pnl-total { font-size: 13px; color: var(--muted); margin-left: auto; }
-  .pnl-total strong { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .card-head, .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .card-head > :last-child:not(:first-child) { margin-left: auto; }
+  .card-title, .panel-title { font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0; }
+  .panel-head .cash { margin-left: auto; }
+  .figure-lg { font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .figure-md { font-size: 14px; line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .pill {
+    display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+    background: var(--chip-bg); color: var(--chip-fg); white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.amber { background: var(--warn-bg); color: var(--warn); }
+  .pill.danger { background: var(--bad-bg); color: var(--danger); }
+
+  .btn {
+    padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font: 600 11.5px var(--font-body); cursor: pointer;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  .tile {
+    width: 34px; height: 34px; border-radius: 8px; flex: none; display: grid; place-items: center;
+    background: var(--warn-bg); color: var(--accent); font-size: 13px; font-weight: 700;
+  }
+
+  /* Portfolio */
+  .pf-figures { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+  .pf-figures .right { text-align: right; }
+  .pf-figures .figure-lg { margin-top: 6px; }
+  .pf-figures .figure-md { margin-top: 6px; }
+  .pf-body { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .pf-empty { display: flex; align-items: center; gap: 12px; }
+  .pf-empty-title { font-size: 13px; font-weight: 600; }
+  .pf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  .pf-pos { display: flex; align-items: center; gap: 12px; }
+  .pf-pos-main { flex: 1; min-width: 0; }
+  .pf-sym { font-size: 13px; font-weight: 600; }
+  .pf-pos-val { text-align: right; font-size: 13px; }
+
+  /* Live monitor */
+  .head-right { display: flex; align-items: center; gap: 8px; }
+  .monitor-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .monitor-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+
+  /* Activity */
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .filters .act-symbol { grid-column: 1 / -1; }
+  .filters select, .filters input {
+    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background-color: var(--panel-2); color: var(--text); font: 12px var(--font-body);
+  }
+  .filters select {
+    appearance: none; -webkit-appearance: none; padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238792a5' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .act-list { list-style: none; margin: 0; padding: 0; }
+  .act-list.scroll { max-height: 440px; overflow-y: auto; }
+  .act-item { border-bottom: 1px solid var(--border); }
+  .act-item:last-child { border-bottom: none; }
+  .act-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; list-style: none; }
+  summary.act-row { cursor: pointer; }
+  summary.act-row::-webkit-details-marker { display: none; }
+  .act-main { flex: 1; min-width: 0; }
+  .act-name { font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
+  .act-meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .act-item pre { margin: 0 0 12px; }
+  .link-btn {
+    display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 4px; padding: 12px 0 0;
+    border: none; border-top: 1px solid var(--border); background: transparent; color: var(--accent);
+    font: 600 12px var(--font-body); cursor: pointer;
+  }
+  .link-btn:hover { opacity: .8; }
+
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap;
+    background: var(--chip-bg); color: var(--chip-fg);
+  }
+  .badge.success, .badge.BUY { background: var(--ok-bg); color: var(--ok); }
+  .badge.failed, .badge.error, .badge.SELL, .badge.stop_hit, .badge.death_cross { background: var(--bad-bg); color: var(--danger); }
+  .badge.dry_run { background: var(--info-bg); color: var(--info); }
+  .badge.sent { background: var(--warn-bg); color: var(--warn); }
+
+  pre {
+    margin: 6px 0 0; padding: 8px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; font-family: var(--font-mono); font-size: 11px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .empty { text-align: center; padding: 28px 8px; color: var(--muted); font-size: 13px; }
+
+  /* Primary position */
+  .primary { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .pos-title { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .pos-name { font-family: var(--font-display); font-size: 20px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
+  .chip {
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--muted); font: 600 11px var(--font-body); letter-spacing: .02em;
+  }
+  .search {
+    display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .search:focus-within { border-color: var(--accent); }
+  .search svg { flex: none; color: var(--muted); }
+  .search input {
+    flex: 1; min-width: 0; padding: 8px 0; border: none; outline: none; background: transparent;
+    color: var(--text); font: 500 13.5px var(--font-body); text-transform: uppercase; letter-spacing: .02em;
+  }
+  .search input::placeholder { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .btn.solid {
+    padding: 7px 18px; border-radius: 8px; border-color: var(--accent); background: var(--accent); color: var(--accent-ink);
+  }
+  .btn.solid:hover { opacity: .9; }
+  .pos-price { text-align: right; }
+  .pos-price .figure-lg { font-size: 24px; margin-top: 4px; }
+  .pos-price .small { margin-top: 4px; min-height: 18px; }
+
+  /* Position chart */
+  .chart-card { flex: 1; display: flex; flex-direction: column; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: -4px 0 8px; font-size: 11.5px; color: var(--muted); }
+  .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .lg i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .lg i.avg { background: var(--accent); }
+  .lg i.k { background: var(--k-color); }
+  .lg i.d { background: var(--d-color); }
+  .lg i.line { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed; }
   .chart-wrap { position: relative; }
-  #pnl-chart { width: 100%; height: 220px; display: block; touch-action: none; }
-  #pnl-chart:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .chart-card .chart-wrap { flex: 1; min-height: 300px; }
+  #candle-chart { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #candle-chart:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  #candle-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 0 16px; }
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0 0; padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .stats dt { font-size: 11.5px; color: var(--muted); }
+  .stats dd { margin: 4px 0 0; font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .period-btns { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+  .period-btns .tab-btn.sm {
+    padding: 4px 11px; border: none; border-radius: 6px; background: transparent;
+    color: var(--muted); font: 600 11px var(--font-body); cursor: pointer;
+  }
+  .period-btns .tab-btn.sm:hover { color: var(--text); }
+  .period-btns .tab-btn.sm.active { background: var(--border); color: var(--text); }
+
   .pnl-tooltip {
     position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.25);
     white-space: nowrap; z-index: 2;
   }
   .pnl-tooltip .v { font-family: var(--font-mono); font-weight: 700; font-variant-numeric: tabular-nums; }
   .pnl-tooltip .d { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  /* ---- Monthly P&L tab ---- */
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    margin-bottom: 16px; padding: 12px 16px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px;
+  }
+  .pnl-total { font-size: 13px; color: var(--muted); margin-left: auto; }
+  .pnl-total strong { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  #pnl-chart { width: 100%; height: 220px; display: block; touch-action: none; }
+  #pnl-chart:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(127,127,127,.06); }
+
+  @media (max-width: 1000px) {
+    body { padding: 20px 16px 32px; }
+    .board { grid-template-columns: minmax(0, 1fr); }
+    .col-main { order: -1; }
+    .topbar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand status" "tabs tabs"; }
+    .brand { padding-bottom: 8px; }
+    .market-status { align-self: start; padding: 8px 0 0; }
+  }
+  @media (max-width: 520px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .pos-price { text-align: left; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>KD Swing</h1>
-  <p class="sub">Automated K/D swing trading on Schwab — portfolio, live signal monitor, and every order attempt logged below. Refreshes every 5s.</p>
-
-  <div class="tabs">
-    <button class="tab-btn active" id="tab-dashboard" type="button">Dashboard</button>
-    <button class="tab-btn" id="tab-pnl" type="button">Monthly P&amp;L</button>
-  </div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow">KD Quant</div>
+      <h1>Trading dashboard</h1>
+    </div>
+    <nav class="tabs">
+      <button class="tab-btn active" id="tab-dashboard" type="button">Dashboard</button>
+      <button class="tab-btn" id="tab-pnl" type="button">Monthly P&amp;L</button>
+    </nav>
+    <div class="market-status">
+      <span class="market-badge closed" id="market-badge"><i class="dot"></i><span id="market-text">Checking…</span></span>
+    </div>
+  </header>
 
   <div id="page-pnl" hidden>
     <div class="toolbar">
-      <span class="panel-title" style="margin:0">Period</span>
+      <span class="panel-title">Period</span>
       <div class="period-btns" id="pnl-period">
         <button class="tab-btn sm" data-period="1m" type="button">1M</button>
         <button class="tab-btn sm" data-period="3m" type="button">3M</button>
@@ -218,7 +330,7 @@
 
     <div class="panel">
       <div class="panel-head">
-        <span class="panel-title" style="margin:0">Cumulative Realized P&amp;L</span>
+        <span class="panel-title">Cumulative Realized P&amp;L</span>
       </div>
       <div class="chart-wrap" id="pnl-chart-wrap">
         <svg id="pnl-chart" viewBox="0 0 760 220" preserveAspectRatio="none" tabindex="0" role="img"
@@ -228,9 +340,9 @@
       <div id="pnl-chart-empty" class="empty" hidden>No closed trades in this period yet.</div>
     </div>
 
-    <div class="panel" style="margin-top:14px">
+    <div class="panel" style="margin-top:16px">
       <div class="panel-head">
-        <span class="panel-title" style="margin:0">Realized P&amp;L by Month</span>
+        <span class="panel-title">Realized P&amp;L by Month</span>
       </div>
       <table>
         <thead>
@@ -246,125 +358,152 @@
     </div>
   </div>
 
-  <div id="page-dashboard">
-  <div class="board-grid">
-    <div class="panel board-portfolio">
-      <div class="panel-head">
-        <span class="panel-title" style="margin:0">Portfolio</span>
-        <span class="cash">
-          Buying power: <strong id="portfolio-cash">—</strong><br>
-          Account value: <strong id="portfolio-equity">—</strong>
-        </span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Qty</th>
-            <th>Avg Cost</th>
-            <th>Current</th>
-            <th>Value</th>
-            <th>P&amp;L</th>
-          </tr>
-        </thead>
-        <tbody id="portfolio-rows"></tbody>
-      </table>
-      <div id="portfolio-empty" class="empty" hidden>No open positions.</div>
+  <main id="page-dashboard" class="board">
+    <div class="col-side">
+      <section class="card">
+        <div class="card-head"><h2 class="card-title">Portfolio</h2></div>
+        <div class="pf-figures">
+          <div>
+            <div class="label">Account value</div>
+            <div class="figure-lg" id="portfolio-equity">—</div>
+          </div>
+          <div class="right">
+            <div class="label">Buying power</div>
+            <div class="figure-md" id="portfolio-cash">—</div>
+          </div>
+        </div>
+        <div class="pf-body">
+          <div id="portfolio-empty" class="pf-empty" hidden>
+            <span class="tile">N</span>
+            <div>
+              <div class="pf-empty-title">No open positions</div>
+              <div class="muted small">Your portfolio is ready for the next signal.</div>
+            </div>
+          </div>
+          <ul id="portfolio-rows" class="pf-list"></ul>
+        </div>
+      </section>
+
+      <section class="card" id="monitor-panel">
+        <div class="card-head">
+          <h2 class="card-title">Live monitor</h2>
+          <span class="head-right">
+            <span class="pill" id="monitor-pill">…</span>
+            <button id="pause-btn" class="btn" type="button">Pause</button>
+          </span>
+        </div>
+        <div class="monitor-meta"><i class="dot amber"></i><span id="monitor-meta">—</span></div>
+        <p class="monitor-note">
+          Account-wide circuit breaker and stop-loss checks run on every poll, along with KD's intraday
+          death-cross/stop check. Signal decisions and position updates appear in the activity log below.
+        </p>
+      </section>
+
+      <section class="card" id="activity-card">
+        <div class="card-head">
+          <h2 class="card-title">Activity</h2>
+          <span class="muted small" id="act-count"></span>
+        </div>
+        <div class="filters">
+          <select id="f-event" aria-label="Filter by event">
+            <option value="">All events</option>
+            <option value="order_submitted">order_submitted</option>
+            <option value="order_result">order_result</option>
+            <option value="order_skipped">order_skipped</option>
+            <option value="kd_entry">kd_entry</option>
+            <option value="kd_exit">kd_exit</option>
+            <option value="kd_intraday_exit">kd_intraday_exit</option>
+            <option value="circuit_breaker">circuit_breaker</option>
+            <option value="stop_loss_triggered">stop_loss_triggered</option>
+            <option value="monitor_control">monitor_control</option>
+            <option value="monitor_error">monitor_error</option>
+          </select>
+          <select id="f-status" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            <option value="success">success</option>
+            <option value="failed">failed</option>
+            <option value="error">error</option>
+            <option value="dry_run">dry_run</option>
+            <option value="sent">sent</option>
+            <option value="skipped">skipped</option>
+            <option value="signal">signal</option>
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+            <option value="HOLD">HOLD</option>
+            <option value="death_cross">death_cross</option>
+            <option value="stop_hit">stop_hit</option>
+          </select>
+          <input id="f-symbol" class="act-symbol" placeholder="Symbol (e.g. AAPL)" hidden />
+        </div>
+        <ul id="rows" class="act-list"></ul>
+        <div id="empty" class="empty" hidden>No activity yet — orders placed through the API will show up here.</div>
+        <button id="act-toggle" class="link-btn" type="button"><span>View complete activity log</span><span aria-hidden="true">→</span></button>
+      </section>
     </div>
 
-    <div class="panel board-monitor" id="monitor-panel">
-      <div class="panel-head">
-        <span class="panel-title" style="margin:0">
-          Live Monitor
-          <span class="market-badge closed" id="market-badge">checking…</span>
-          <span class="market-badge tripped" id="breaker-badge" hidden>circuit breaker tripped</span>
-        </span>
-        <button id="pause-btn" class="btn" type="button">Pause</button>
-      </div>
-      <span class="monitor-meta" id="monitor-meta" style="display:block">—</span>
-      <p class="sub" style="margin:8px 0 0">
-        Account-wide safety net (circuit breaker + blanket stop-loss) and KD's
-        intraday death-cross/stop check run every poll. KD's own BUY/SELL
-        decisions and position status show up in the activity log below —
-        filter Event by <code>kd_entry</code>, <code>kd_exit</code>, or
-        <code>kd_intraday_exit</code>.
-      </p>
+    <div class="col-main">
+      <form class="search" id="symbol-search" role="search" autocomplete="off">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="chart-symbol" type="text" maxlength="10" placeholder="Search any stock or ETF — e.g. AAPL, TSLA, SPY"
+               aria-label="Search a symbol" autocapitalize="characters" spellcheck="false" />
+        <button type="button" class="btn" id="search-reset" hidden>Back to position</button>
+        <button type="submit" class="btn solid" id="search-btn">Search</button>
+      </form>
+
+      <section class="card primary">
+        <div>
+          <div class="eyebrow" id="pos-eyebrow">Primary position</div>
+          <div class="pos-title">
+            <span class="pos-name" id="pos-name">—</span>
+            <span class="chip" id="pos-chip" hidden></span>
+          </div>
+        </div>
+        <div class="pos-price">
+          <div class="label">Last price</div>
+          <div class="figure-lg" id="pos-last">—</div>
+          <div class="small" id="pos-change"></div>
+        </div>
+      </section>
+
+      <section class="card chart-card">
+        <div class="card-head">
+          <h2 class="card-title">Position chart</h2>
+          <div class="period-btns" id="chart-period">
+            <button class="tab-btn sm" data-period="1w" type="button">1W</button>
+            <button class="tab-btn sm" data-period="1m" type="button">1M</button>
+            <button class="tab-btn sm active" data-period="3m" type="button">3M</button>
+            <button class="tab-btn sm" data-period="1y" type="button">1Y</button>
+          </div>
+        </div>
+        <div class="legend" id="chart-legend"></div>
+        <div class="chart-wrap" id="candle-chart-wrap">
+          <svg id="candle-chart" preserveAspectRatio="none" tabindex="0" role="img"
+               aria-label="Daily candlestick chart for the charted symbol"></svg>
+          <div class="pnl-tooltip" id="candle-tooltip" hidden></div>
+          <div id="candle-empty" class="empty">No open position — search a symbol above to look one up.</div>
+        </div>
+        <dl class="stats">
+          <div><dt>Period high</dt><dd id="stat-high">—</dd></div>
+          <div><dt>Period low</dt><dd id="stat-low">—</dd></div>
+          <div><dt>Volume</dt><dd id="stat-volume">—</dd></div>
+          <div><dt>Data as of</dt><dd id="stat-asof">—</dd></div>
+        </dl>
+      </section>
     </div>
-
-    <div class="panel board-chart">
-      <div class="panel-head">
-        <span class="panel-title" style="margin:0" id="chart-title">Position Chart</span>
-        <span class="chart-last" id="chart-last" hidden></span>
-        <input id="chart-symbol" class="chart-symbol-input" placeholder="Symbol" maxlength="6" />
-      </div>
-      <div class="chart-wrap" id="candle-chart-wrap">
-        <svg id="candle-chart" viewBox="0 0 640 280" preserveAspectRatio="none" tabindex="0" role="img"
-             aria-label="Daily candlestick chart for the charted symbol"></svg>
-        <div class="pnl-tooltip" id="candle-tooltip" hidden></div>
-      </div>
-      <div id="candle-empty" class="empty" hidden>No open position — type a symbol above to look one up.</div>
-    </div>
-  </div>
-
-  <div class="toolbar">
-    <input id="f-symbol" placeholder="Symbol (e.g. AAPL)" size="12" />
-    <select id="f-event">
-      <option value="">All events</option>
-      <option value="order_submitted">order_submitted</option>
-      <option value="order_result">order_result</option>
-      <option value="order_skipped">order_skipped</option>
-      <option value="kd_entry">kd_entry</option>
-      <option value="kd_exit">kd_exit</option>
-      <option value="kd_intraday_exit">kd_intraday_exit</option>
-      <option value="circuit_breaker">circuit_breaker</option>
-      <option value="stop_loss_triggered">stop_loss_triggered</option>
-      <option value="monitor_control">monitor_control</option>
-      <option value="monitor_error">monitor_error</option>
-    </select>
-    <select id="f-status">
-      <option value="">All statuses</option>
-      <option value="success">success</option>
-      <option value="failed">failed</option>
-      <option value="error">error</option>
-      <option value="dry_run">dry_run</option>
-      <option value="sent">sent</option>
-      <option value="skipped">skipped</option>
-      <option value="signal">signal</option>
-      <option value="BUY">BUY</option>
-      <option value="SELL">SELL</option>
-      <option value="HOLD">HOLD</option>
-      <option value="death_cross">death_cross</option>
-      <option value="stop_hit">stop_hit</option>
-    </select>
-    <label><input type="checkbox" id="f-auto" checked /> Auto-refresh</label>
-    <span class="status-dot" id="live-dot"></span>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Time (LA)</th>
-        <th>Event</th>
-        <th>Symbol</th>
-        <th>Status</th>
-        <th>Detail</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div id="empty" class="empty" hidden>No activity yet — orders placed through the API will show up here.</div>
-  </div>
+  </main>
 </div>
 
 <script>
   const rowsEl = document.getElementById('rows');
   const emptyEl = document.getElementById('empty');
-  const dot = document.getElementById('live-dot');
   const fSymbol = document.getElementById('f-symbol');
   const fStatus = document.getElementById('f-status');
   const fEvent = document.getElementById('f-event');
-  const fAuto = document.getElementById('f-auto');
-  let timer = null;
+  const actToggle = document.getElementById('act-toggle');
+  const actCount = document.getElementById('act-count');
+  const RECENT_LIMIT = 5;
+  const FULL_LIMIT = 200;
+  let actExpanded = false;
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -377,26 +516,37 @@
     return d.toLocaleString('en-US', {
       timeZone: 'America/Los_Angeles',
       year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
     });
   }
 
+  function fmtLAShort(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).replace(', ', ' ');
+  }
+
   function renderRow(ev) {
-    const detail = ev.detail ? `<details><summary>view</summary><pre>${esc(JSON.stringify(ev.detail, null, 2))}</pre></details>` : '';
-    const error = ev.error ? `<pre>${esc(ev.error)}</pre>` : '';
     const status = ev.status || '-';
-    return `<tr>
-      <td class="ts">${esc(fmtLA(ev.ts))}</td>
-      <td>${esc(ev.event_type)}</td>
-      <td><code class="symbol">${esc(ev.symbol || '-')}</code></td>
-      <td><span class="badge ${esc(status)}">${esc(status)}</span></td>
-      <td>${detail}${error}</td>
-    </tr>`;
+    const head = `<div class="act-main">
+        <div class="act-name">${esc(ev.event_type)}</div>
+        <div class="act-meta mono">${esc(fmtLAShort(ev.ts))} · ${esc(ev.symbol || '—')}</div>
+      </div>
+      <span class="badge ${esc(status)}">${esc(status)}</span>`;
+    const detail = ev.detail ? `<pre>${esc(JSON.stringify(ev.detail, null, 2))}</pre>` : '';
+    const error = ev.error ? `<pre>${esc(ev.error)}</pre>` : '';
+    if (!detail && !error) return `<li class="act-item"><div class="act-row">${head}</div></li>`;
+    return `<li class="act-item"><details><summary class="act-row">${head}</summary>${detail}${error}</details></li>`;
   }
 
   async function load() {
-    const params = new URLSearchParams({ limit: '200' });
-    if (fSymbol.value.trim()) params.set('symbol', fSymbol.value.trim().toUpperCase());
+    const params = new URLSearchParams({ limit: String(actExpanded ? FULL_LIMIT : RECENT_LIMIT) });
+    if (actExpanded && fSymbol.value.trim()) params.set('symbol', fSymbol.value.trim().toUpperCase());
     if (fStatus.value) params.set('status', fStatus.value);
     if (fEvent.value) params.set('event_type', fEvent.value);
 
@@ -404,7 +554,7 @@
       const res = await fetch(`/api/activity?${params.toString()}`);
       if (!res.ok) throw new Error(res.status);
       const events = await res.json();
-      dot.classList.add('live');
+      actCount.textContent = events.length ? `${events.length} ${actExpanded ? 'shown' : 'recent'}` : '';
       if (!events.length) {
         rowsEl.innerHTML = '';
         emptyEl.hidden = false;
@@ -413,12 +563,21 @@
       emptyEl.hidden = true;
       rowsEl.innerHTML = events.map(renderRow).join('');
     } catch (e) {
-      dot.classList.remove('live');
+      actCount.textContent = 'unavailable';
     }
   }
 
+  actToggle.addEventListener('click', () => {
+    actExpanded = !actExpanded;
+    fSymbol.hidden = !actExpanded;
+    rowsEl.classList.toggle('scroll', actExpanded);
+    actToggle.firstElementChild.textContent = actExpanded ? 'Show recent only' : 'View complete activity log';
+    load();
+  });
+
   const marketBadge = document.getElementById('market-badge');
-  const breakerBadge = document.getElementById('breaker-badge');
+  const marketText = document.getElementById('market-text');
+  const monitorPill = document.getElementById('monitor-pill');
   const pauseBtn = document.getElementById('pause-btn');
   const monitorMeta = document.getElementById('monitor-meta');
   let manualPause = false;
@@ -439,28 +598,26 @@
       if (!res.ok) throw new Error(res.status);
       const state = await res.json();
 
-      marketBadge.textContent = state.market_open ? 'Market open' : 'Market closed';
+      marketText.textContent = state.market_open ? 'US market open' : 'US market closed';
       marketBadge.className = `market-badge ${state.market_open ? 'open' : 'closed'}`;
 
       const breaker = state.circuit_breaker || {};
-      breakerBadge.hidden = !breaker.tripped;
-
       manualPause = !!state.manual_pause;
       pauseBtn.textContent = manualPause ? 'Resume' : 'Pause';
-      pauseBtn.className = `btn ${manualPause ? 'paused' : ''}`;
 
-      const monitorPanel = document.getElementById('monitor-panel');
-      monitorPanel.classList.remove('panel-live', 'panel-alert', 'panel-paused');
-      if (breaker.tripped) monitorPanel.classList.add('panel-alert');
-      else if (manualPause) monitorPanel.classList.add('panel-paused');
-      else if (state.market_open) monitorPanel.classList.add('panel-live');
+      let pill = ['Standing by', ''];
+      if (breaker.tripped) pill = ['Breaker tripped', 'danger'];
+      else if (manualPause) pill = ['Paused', 'amber'];
+      else if (state.market_open) pill = ['Running', 'ok'];
+      monitorPill.textContent = pill[0];
+      monitorPill.className = `pill ${pill[1]}`;
 
-      const dayPl = (typeof breaker.day_pl === 'number') ? ` | today's P&L: ${fmtMoney(breaker.day_pl)}` : '';
+      const dayPl = (typeof breaker.day_pl === 'number') ? ` · today's P&L ${fmtMoney(breaker.day_pl)}` : '';
       monitorMeta.textContent = state.last_poll
-        ? `last poll: ${fmtLA(state.last_poll)}${dayPl}${state.last_error ? ' — error: ' + state.last_error : ''}`
-        : 'not polled yet';
+        ? `Last poll · ${fmtLA(state.last_poll)} PT${dayPl}${state.last_error ? ' — error: ' + state.last_error : ''}`
+        : 'Not polled yet';
     } catch (e) {
-      monitorMeta.textContent = 'monitor status unavailable';
+      monitorMeta.textContent = 'Monitor status unavailable';
     }
   }
 
@@ -473,19 +630,29 @@
     return (typeof v === 'number') ? v.toLocaleString(undefined, { style: 'currency', currency: 'USD' }) : '-';
   }
 
+  function fmtVolume(v) {
+    if (typeof v !== 'number') return '—';
+    if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    return String(v);
+  }
+
   function renderPortfolioRow(p) {
-    const plClass = (typeof p.unrealized_pl === 'number') ? (p.unrealized_pl >= 0 ? 'pl-pos' : 'pl-neg') : '';
-    const plText = (typeof p.unrealized_pl === 'number')
-      ? `${fmtMoney(p.unrealized_pl)} (${(p.unrealized_pl_pct * 100).toFixed(1)}%)`
-      : '-';
-    return `<tr>
-      <td><code class="symbol">${esc(p.symbol)}</code></td>
-      <td class="mono">${p.quantity}</td>
-      <td class="mono">${fmtMoney(p.average_price)}</td>
-      <td class="mono">${fmtMoney(p.current_price)}</td>
-      <td class="mono">${fmtMoney(p.market_value)}</td>
-      <td class="mono ${plClass}">${plText}</td>
-    </tr>`;
+    const hasPl = typeof p.unrealized_pl === 'number';
+    const plClass = hasPl ? (p.unrealized_pl >= 0 ? 'pl-pos' : 'pl-neg') : '';
+    const plText = hasPl ? `${fmtMoney(p.unrealized_pl)} (${(p.unrealized_pl_pct * 100).toFixed(1)}%)` : '-';
+    return `<li class="pf-pos">
+      <span class="tile">${esc(String(p.symbol).charAt(0))}</span>
+      <div class="pf-pos-main">
+        <div class="pf-sym">${esc(p.symbol)}</div>
+        <div class="muted small mono">${p.quantity} sh · avg ${fmtMoney(p.average_price)}</div>
+      </div>
+      <div class="pf-pos-val">
+        <div class="mono">${fmtMoney(p.market_value)}</div>
+        <div class="mono small ${plClass}">${plText}</div>
+      </div>
+    </li>`;
   }
 
   async function loadPortfolio() {
@@ -513,42 +680,87 @@
     }
   }
 
-  // --- Position candlestick chart (right panel) ---
+  // --- Position header + candlestick chart (right column) ---
+  const searchForm = document.getElementById('symbol-search');
   const chartSymbolInput = document.getElementById('chart-symbol');
-  const chartTitle = document.getElementById('chart-title');
-  const chartLast = document.getElementById('chart-last');
+  const searchBtn = document.getElementById('search-btn');
+  const searchReset = document.getElementById('search-reset');
+  const posChip = document.getElementById('pos-chip');
+  const posEyebrow = document.getElementById('pos-eyebrow');
+  const posName = document.getElementById('pos-name');
+  const posLast = document.getElementById('pos-last');
+  const posChange = document.getElementById('pos-change');
+  const chartLegend = document.getElementById('chart-legend');
+  const statHigh = document.getElementById('stat-high');
+  const statLow = document.getElementById('stat-low');
+  const statVolume = document.getElementById('stat-volume');
+  const statAsOf = document.getElementById('stat-asof');
   const candleSvg = document.getElementById('candle-chart');
   const candleTooltip = document.getElementById('candle-tooltip');
   const candleEmpty = document.getElementById('candle-empty');
   const candleChartWrap = document.getElementById('candle-chart-wrap');
+  const chartPeriodBtns = document.querySelectorAll('#chart-period .tab-btn');
+  const PERIOD_LABEL = { '1w': 'this week', '1m': 'this month', '3m': 'past 3 months', '1y': 'past year' };
   let candleUserSet = false;
   let lastPositionSymbol = null;
-  let candleBars = [];
+  let chartSymbol = null;
+  let candleAll = [];       // every bar the API returned (~1y), oldest first
+  let candleBars = [];      // the slice for the selected period
+  let candlePosition = null;
+  let candlePeriod = '3m';
+  let candleAvg = [];       // 30-day average aligned to candleBars
 
-  function showNoSymbol() {
-    candleBars = [];
+  function tidyName(desc) {
+    // Schwab descriptions read "NVIDIA CORP" / "APPLE INC" - drop the legal suffix.
+    return String(desc).replace(/[,.]/g, '').replace(/\s+(INC|CORP|CORPORATION|CO|LTD|PLC|HOLDINGS|COMPANY)$/i, '').trim();
+  }
+
+  function updateEyebrow() {
+    posEyebrow.textContent = chartSymbol && chartSymbol !== lastPositionSymbol ? 'Symbol lookup' : 'Primary position';
+    posChip.textContent = chartSymbol || '';
+    posChip.hidden = !chartSymbol;
+  }
+
+  function clearChart(message) {
+    candleAll = []; candleBars = []; candlePosition = null;
     candleSvg.innerHTML = '';
     candleTooltip.hidden = true;
-    chartLast.hidden = true;
-    chartTitle.textContent = 'Position Chart';
-    candleEmpty.textContent = 'No open position — type a symbol above to look one up.';
+    chartLegend.innerHTML = '';
+    posLast.textContent = '—';
+    posChange.textContent = '';
+    statHigh.textContent = statLow.textContent = statVolume.textContent = statAsOf.textContent = '—';
+    candleEmpty.textContent = message;
     candleEmpty.hidden = false;
   }
 
+  function showNoSymbol() {
+    chartSymbol = null;
+    posName.textContent = '—';
+    clearChart('No open position — search a symbol above to look one up.');
+    updateEyebrow();
+  }
+
   async function loadCandles(symbol) {
-    chartTitle.textContent = `Position Chart · ${symbol}`;
+    chartSymbol = symbol;
+    updateEyebrow();
+    searchBtn.disabled = true;
+    searchBtn.textContent = 'Searching…';
     try {
-      const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}?days=90`);
+      const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}?days=250`);
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
-      renderCandleChart(data.bars || [], data.position || null);
+      if (symbol !== chartSymbol) return;  // user switched symbols while this was in flight
+      posName.textContent = data.name ? tidyName(data.name) : symbol;
+      candleAll = data.bars || [];
+      candlePosition = data.position || null;
+      renderCandles();
     } catch (e) {
-      candleBars = [];
-      candleSvg.innerHTML = '';
-      candleTooltip.hidden = true;
-      chartLast.hidden = true;
-      candleEmpty.textContent = `Couldn't load price history for ${symbol}.`;
-      candleEmpty.hidden = false;
+      if (symbol !== chartSymbol) return;
+      posName.textContent = symbol;
+      clearChart(`Couldn't load price history for ${symbol}.`);
+    } finally {
+      searchBtn.disabled = false;
+      searchBtn.textContent = 'Search';
     }
   }
 
@@ -562,47 +774,112 @@
 
   function autoSetChartSymbol(symbol) {
     lastPositionSymbol = symbol || null;
-    if (candleUserSet) return;
-    if (chartSymbolInput.value.toUpperCase() === (symbol || '')) return;
-    chartSymbolInput.value = symbol || '';
+    if (candleUserSet) { updateEyebrow(); return; }
+    if (chartSymbol === lastPositionSymbol) return;
     if (symbol) loadCandles(symbol); else showNoSymbol();
   }
 
-  chartSymbolInput.addEventListener('keyup', e => {
-    if (e.key !== 'Enter') return;
+  searchForm.addEventListener('submit', e => {
+    e.preventDefault();
     const sym = chartSymbolInput.value.trim().toUpperCase();
     chartSymbolInput.value = sym;
-    if (sym) {
-      candleUserSet = true;
-      loadCandles(sym);
-    } else {
-      candleUserSet = false;
-      if (lastPositionSymbol) loadCandles(lastPositionSymbol); else showNoSymbol();
-      chartSymbolInput.value = lastPositionSymbol || '';
+    if (!sym) return;
+    candleUserSet = true;
+    searchReset.hidden = false;
+    if (!/^[A-Z0-9][A-Z0-9.\-\/]{0,9}$/.test(sym)) {
+      chartSymbol = sym;
+      posName.textContent = '—';
+      clearChart('Symbols use letters, digits, "." or "-" only.');
+      updateEyebrow();
+      return;
     }
+    loadCandles(sym);
   });
 
-  function renderCandleChart(bars, position) {
-    candleBars = bars;
-    if (!bars.length) {
-      candleSvg.innerHTML = '';
-      candleTooltip.hidden = true;
-      chartLast.hidden = true;
-      candleEmpty.textContent = 'No daily price history yet for this symbol.';
-      candleEmpty.hidden = false;
+  searchReset.addEventListener('click', () => {
+    candleUserSet = false;
+    chartSymbolInput.value = '';
+    searchReset.hidden = true;
+    if (lastPositionSymbol) loadCandles(lastPositionSymbol); else showNoSymbol();
+  });
+
+  chartPeriodBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      chartPeriodBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      candlePeriod = btn.dataset.period;
+      renderCandles();
+    });
+  });
+
+  function periodStartIndex(all, period) {
+    const cutoff = parseTradeDate(all[all.length - 1].trade_date);
+    if (period === '1w') cutoff.setDate(cutoff.getDate() - 7);
+    else if (period === '1m') cutoff.setMonth(cutoff.getMonth() - 1);
+    else if (period === '3m') cutoff.setMonth(cutoff.getMonth() - 3);
+    else cutoff.setFullYear(cutoff.getFullYear() - 1);
+    const idx = all.findIndex(b => parseTradeDate(b.trade_date) > cutoff);
+    return idx < 0 ? all.length - 1 : idx;
+  }
+
+  // Header price/change, legend, stats footer, then the chart itself. The
+  // 30-day average is computed over every fetched bar so it's already warm at
+  // the left edge of a short window.
+  function renderCandles() {
+    if (!candleAll.length) {
+      clearChart(`No price data found for ${chartSymbol} — check the ticker.`);
       return;
     }
     candleEmpty.hidden = true;
 
-    const last = bars[bars.length - 1];
-    const prevClose = bars.length > 1 ? bars[bars.length - 2].close : last.open;
-    chartLast.hidden = false;
-    chartLast.textContent = `Last ${fmtMoney(last.close)}`;
-    chartLast.className = `chart-last ${last.close >= prevClose ? 'pl-pos' : 'pl-neg'}`;
+    const start = periodStartIndex(candleAll, candlePeriod);
+    candleBars = candleAll.slice(start);
+    const last = candleBars[candleBars.length - 1];
+    const base = start > 0 ? candleAll[start - 1].close : candleBars[0].open;
+    const change = (last.close - base) / base;
 
-    const W = 640, H = 280;
-    const padL = 56, padR = 14, padT = 14, padB = 24;
-    const plotW = W - padL - padR, plotH = H - padT - padB;
+    posLast.textContent = fmtMoney(last.close);
+    posChange.textContent = `${change >= 0 ? '+' : ''}${(change * 100).toFixed(2)}% ${PERIOD_LABEL[candlePeriod]}`;
+    posChange.className = `small ${change >= 0 ? 'pl-pos' : 'pl-neg'}`;
+
+    statHigh.textContent = fmtMoney(Math.max(...candleBars.map(b => b.high)));
+    statLow.textContent = fmtMoney(Math.min(...candleBars.map(b => b.low)));
+    statVolume.textContent = fmtVolume(last.volume);
+    statAsOf.textContent = fmtDateShort(parseTradeDate(last.trade_date));
+
+    let legend = '<span class="lg"><i class="avg"></i>30-day average</span><span class="lg"><i class="k"></i>K value</span><span class="lg"><i class="d"></i>D value</span>';
+    if (candlePosition && typeof candlePosition.entry_price === 'number') legend += '<span class="lg"><i class="line" style="color:var(--accent)"></i>Entry</span>';
+    if (candlePosition && typeof candlePosition.stop_price === 'number') legend += '<span class="lg"><i class="line" style="color:var(--danger)"></i>Stop</span>';
+    chartLegend.innerHTML = legend;
+
+    candleAvg = candleAll.map((_, i) => {
+      if (i < 29) return null;
+      let sum = 0;
+      for (let j = i - 29; j <= i; j++) sum += candleAll[j].close;
+      return sum / 30;
+    }).slice(start);
+
+    drawCandleChart();
+  }
+
+
+
+  function drawCandleChart() {
+    const bars = candleBars;
+    if (!bars.length) return;
+    const position = candlePosition;
+
+    // Render at the container's real pixel size (the SVG fills the flexible chart
+    // area) so text and candle bodies never get stretched.
+    const W = Math.max(280, candleChartWrap.clientWidth);
+    const H = Math.max(240, candleChartWrap.clientHeight);
+    const padL = 64, padR = 12, padT = 12, padB = 28;
+    const plotW = W - padL - padR, totalH = H - padT - padB;
+    // Candles on top, the K/D oscillator (0-100) in a sub-chart underneath.
+    const kdGap = 22, kdH = Math.max(72, Math.round(totalH * 0.27));
+    const plotH = totalH - kdH - kdGap;
+    const kdTop = padT + plotH + kdGap;
+    const kdY = v => kdTop + ((100 - v) / 100) * kdH;
 
     let lo = Math.min(...bars.map(b => b.low));
     let hi = Math.max(...bars.map(b => b.high));
@@ -614,7 +891,7 @@
     lo -= pricePad; hi += pricePad;
 
     const slot = plotW / bars.length;
-    const bodyW = Math.max(2, Math.min(14, slot - 2));
+    const bodyW = Math.max(2, Math.min(16, slot * 0.62));
     const xCenter = i => padL + slot * (i + 0.5);
     const yScale = v => padT + ((hi - v) / (hi - lo)) * plotH;
 
@@ -628,48 +905,83 @@
     const mutedColor = cssVar('--muted', '#6b6b74');
     const accentColor = cssVar('--accent', '#96701f');
     const dangerColor = cssVar('--danger', '#b3261e');
+    const panelColor = cssVar('--panel', '#ffffff');
+    const kColor = cssVar('--k-color', '#5aa9ff');
+    const dColor = cssVar('--d-color', '#c58bff');
 
     const ticks = computeTicks(lo, hi, 4);
     let svg = '';
     ticks.forEach(t => {
       const y = yScale(t);
       svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${gridColor}" stroke-width="1" shape-rendering="crispEdges" />`;
-      svg += `<text x="${padL - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="${mutedColor}">${esc(fmtAxis(t))}</text>`;
+      svg += `<text x="${padL - 10}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10.5" fill="${mutedColor}">${esc(fmtAxis(t))}</text>`;
     });
 
-    const tickCount = Math.min(6, bars.length);
+    const tickCount = Math.min(W < 480 ? 4 : 6, bars.length);
     const xIdxs = new Set();
     for (let i = 0; i < tickCount; i++) xIdxs.add(Math.round((i * (bars.length - 1)) / Math.max(1, tickCount - 1)));
     [...xIdxs].forEach(i => {
-      svg += `<text x="${xCenter(i)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="${mutedColor}">${esc(fmtDateShort(parseTradeDate(bars[i].trade_date)))}</text>`;
+      svg += `<text x="${xCenter(i)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="${mutedColor}">${esc(fmtDateShort(parseTradeDate(bars[i].trade_date)))}</text>`;
     });
+
+    svg += `<clipPath id="candle-clip"><rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" /></clipPath>`;
 
     bars.forEach((b, i) => {
       const up = b.close >= b.open;
       const color = up ? posColor : negColor;
       const cx = xCenter(i);
-      const yHigh = yScale(b.high), yLow = yScale(b.low);
-      const yOpen = yScale(b.open), yClose = yScale(b.close);
-      const bodyTop = Math.min(yOpen, yClose);
-      const bodyH = Math.max(1, Math.abs(yClose - yOpen));
-      svg += `<line x1="${cx}" y1="${yHigh}" x2="${cx}" y2="${yLow}" stroke="${color}" stroke-width="1" />`;
-      svg += `<rect x="${cx - bodyW / 2}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="${color}" />`;
+      const bodyTop = Math.min(yScale(b.open), yScale(b.close));
+      const bodyH = Math.max(1, Math.abs(yScale(b.close) - yScale(b.open)));
+      svg += `<line x1="${cx}" y1="${yScale(b.high)}" x2="${cx}" y2="${yScale(b.low)}" stroke="${color}" stroke-width="1" />`;
+      svg += `<rect x="${cx - bodyW / 2}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" rx="1" fill="${color}" />`;
     });
+
+    const avgPts = candleAvg
+      .map((v, i) => (v == null ? null : `${xCenter(i)},${yScale(v)}`))
+      .filter(Boolean);
+    if (avgPts.length > 1) {
+      svg += `<polyline points="${avgPts.join(' ')}" fill="none" stroke="${accentColor}" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#candle-clip)" />`;
+    }
 
     if (position && typeof position.entry_price === 'number') {
       const y = yScale(position.entry_price);
       svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${accentColor}" stroke-width="1" stroke-dasharray="3,3" />`;
-      svg += `<text x="${W - padR - 4}" y="${y - 4}" text-anchor="end" font-size="10" fill="${mutedColor}">Entry ${esc(fmtMoney(position.entry_price))}</text>`;
+      svg += `<text x="${W - padR - 4}" y="${y - 4}" text-anchor="end" font-size="10.5" fill="${mutedColor}" stroke="${panelColor}" stroke-width="3" paint-order="stroke">Entry ${esc(fmtMoney(position.entry_price))}</text>`;
     }
     if (position && typeof position.stop_price === 'number') {
       const y = yScale(position.stop_price);
       svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${dangerColor}" stroke-width="1" stroke-dasharray="3,3" />`;
-      svg += `<text x="${W - padR - 4}" y="${y - 4}" text-anchor="end" font-size="10" fill="${mutedColor}">Stop ${esc(fmtMoney(position.stop_price))}</text>`;
+      svg += `<text x="${W - padR - 4}" y="${y - 4}" text-anchor="end" font-size="10.5" fill="${mutedColor}" stroke="${panelColor}" stroke-width="3" paint-order="stroke">Stop ${esc(fmtMoney(position.stop_price))}</text>`;
     }
 
-    svg += `<rect id="candle-hover-box" x="0" y="${padT}" width="0" height="${plotH}" fill="${mutedColor}" opacity="0" />`;
+    // KD sub-chart: shaded oversold (<20) / overbought (>80) bands, 20/80 guides,
+    // then the K and D lines (broken wherever a value is missing).
+    svg += `<rect x="${padL}" y="${kdY(100)}" width="${plotW}" height="${kdY(80) - kdY(100)}" fill="${mutedColor}" opacity="0.07" />`;
+    svg += `<rect x="${padL}" y="${kdY(20)}" width="${plotW}" height="${kdY(0) - kdY(20)}" fill="${mutedColor}" opacity="0.07" />`;
+    [80, 50, 20].forEach(t => {
+      const y = kdY(t);
+      svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${gridColor}" stroke-width="1" ${t === 50 ? '' : 'stroke-dasharray="3,3"'} shape-rendering="crispEdges" />`;
+      svg += `<text x="${padL - 10}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10.5" fill="${mutedColor}">${t}</text>`;
+    });
+    svg += `<line x1="${padL}" y1="${kdY(0)}" x2="${W - padR}" y2="${kdY(0)}" stroke="${gridColor}" stroke-width="1" shape-rendering="crispEdges" />`;
+    const kdPath = key => {
+      let d = '', pen = false;
+      bars.forEach((b, i) => {
+        const v = b[key];
+        if (typeof v !== 'number') { pen = false; return; }
+        d += `${pen ? 'L' : 'M'}${xCenter(i)},${kdY(v)} `;
+        pen = true;
+      });
+      return d.trim();
+    };
+    [['d', dColor], ['k', kColor]].forEach(([key, color]) => {
+      const d = kdPath(key);
+      if (d) svg += `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`;
+    });
+
+    svg += `<rect id="candle-hover-box" x="0" y="${padT}" width="0" height="${totalH}" fill="${mutedColor}" opacity="0" />`;
     for (let i = 0; i < bars.length; i++) {
-      svg += `<rect class="candle-hit" data-i="${i}" x="${padL + slot * i}" y="${padT}" width="${slot}" height="${plotH}" fill="transparent" />`;
+      svg += `<rect class="candle-hit" data-i="${i}" x="${padL + slot * i}" y="${padT}" width="${slot}" height="${totalH}" fill="transparent" />`;
     }
 
     candleSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -679,6 +991,8 @@
       el.addEventListener('pointerenter', () => candleShowTooltip(parseInt(el.dataset.i, 10)));
     });
   }
+
+  if (window.ResizeObserver) new ResizeObserver(() => drawCandleChart()).observe(candleChartWrap);
 
   function candleShowTooltip(index) {
     const b = candleBars[index];
@@ -697,7 +1011,10 @@
     const changeClass = change >= 0 ? 'pl-pos' : 'pl-neg';
     candleTooltip.innerHTML =
       `<div class="v ${changeClass}">${esc(fmtMoney(b.close))}</div>` +
-      `<div class="d">${esc(fmtDateShort(parseTradeDate(b.trade_date)))} · H ${esc(fmtMoney(b.high))} L ${esc(fmtMoney(b.low))}</div>`;
+      `<div class="d">${esc(fmtDateShort(parseTradeDate(b.trade_date)))} · H ${esc(fmtMoney(b.high))} L ${esc(fmtMoney(b.low))}</div>` +
+      (typeof b.k === 'number'
+        ? `<div class="d">K ${b.k.toFixed(1)}${typeof b.d === 'number' ? ` · D ${b.d.toFixed(1)}` : ''}</div>`
+        : '');
     candleTooltip.hidden = false;
 
     const wrapRect = candleChartWrap.getBoundingClientRect();
@@ -724,31 +1041,18 @@
     else if (e.key === 'ArrowRight') { candleShowTooltip(Math.min(candleBars.length - 1, current + 1)); e.preventDefault(); }
   });
 
-  let candleTimer = null;
-
-  function scheduleAutoRefresh() {
-    if (timer) clearInterval(timer);
-    if (candleTimer) clearInterval(candleTimer);
-    if (fAuto.checked) {
-      timer = setInterval(() => { load(); loadMonitor(); loadPortfolio(); }, 5000);
-      // Daily bars don't need 5s polling, but a long-lived tab should still
-      // pick up the next day's backfill (or a same-symbol re-entry's new
-      // entry/stop) without a manual reload.
-      candleTimer = setInterval(() => {
-        const sym = chartSymbolInput.value.trim().toUpperCase();
-        if (sym) loadCandles(sym);
-      }, 5 * 60 * 1000);
-    }
-  }
+  // Activity/monitor/portfolio poll every 5s. Daily bars don't need that, but a
+  // long-lived tab should still pick up the next day's backfill (or a
+  // same-symbol re-entry's new entry/stop) without a manual reload.
+  setInterval(() => { load(); loadMonitor(); loadPortfolio(); }, 5000);
+  setInterval(() => { if (chartSymbol) loadCandles(chartSymbol); }, 5 * 60 * 1000);
 
   [fSymbol, fStatus, fEvent].forEach(el => el.addEventListener('change', load));
   fSymbol.addEventListener('keyup', e => { if (e.key === 'Enter') load(); });
-  fAuto.addEventListener('change', scheduleAutoRefresh);
 
   load();
   loadMonitor();
   loadPortfolio();
-  scheduleAutoRefresh();
 
   // --- Tabs: Dashboard <-> Monthly P&L ---
   const tabDashboard = document.getElementById('tab-dashboard');

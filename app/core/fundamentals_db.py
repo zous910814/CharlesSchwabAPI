@@ -157,6 +157,25 @@ async def upsert_fundamental(symbol: str, as_of_date: date, parsed: dict, *, sou
     return 1
 
 
+async def get_description(symbol: str) -> Optional[str]:
+    """Latest non-empty instrument description (e.g. "NVIDIA CORP") for
+    `symbol`, or None. Feeds the dashboard's position header."""
+    pool = price_history_db.get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT description FROM fundamentals "
+                "WHERE symbol = $1 AND description IS NOT NULL AND description <> '' "
+                "ORDER BY as_of_date DESC LIMIT 1",
+                symbol,
+            )
+    except Exception:
+        logger.exception("fundamentals description lookup failed for %s", symbol)
+        return None
+
+
 async def fetch_all_fundamentals() -> list[dict]:
     """Every symbol's full fundamentals history, oldest first per symbol —
     for joining onto price_history features when training a model."""

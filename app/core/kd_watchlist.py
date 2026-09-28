@@ -106,6 +106,21 @@ TREND_FILTER_SMA_PERIOD = 200
 # "is the broad market itself in an uptrend". SPY over $SPX/$COMPX etc.
 # because it's an ordinary equity ticker, so it backfills through the exact
 # same price_history path as every other symbol with no special-casing.
+#
+# MARKET_FILTER_ENABLED default False (2026-09-28): backtested against
+# production price_history on the same window as the trend filter + time
+# stop above (see docs/KD_RISK_CONTROLS_BACKTEST.md) and came out net
+# negative both times - single-account went from +0.7% to -4.2%, and the
+# large-sample diversified version from ~breakeven to -$5.8k, with a LOWER
+# win rate in the diversified case too. Most likely cause: this window was
+# mostly a broad uptrend, so SPY dipping below its 60-day SMA tended to
+# coincide with exactly the kind of short pullback this mean-reversion rule
+# is trying to buy - the filter blocked good entries more often than bad
+# ones. Left wired up (not deleted) because its real value - dodging a
+# genuine market-wide selloff - never got tested in this window; flip back
+# to True and re-backtest if a bear-market period becomes available, same
+# pattern as backtest_kd_daily.py's ENABLE_SHORTS/ENABLE_QUALITY_FILTERS.
+MARKET_FILTER_ENABLED = False
 MARKET_FILTER_SYMBOL = "SPY"
 MARKET_FILTER_SMA_PERIOD = 60
 
@@ -544,8 +559,8 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
        "order": <submit_order's return>}
       {"action": "HOLD", "symbol": ...}        - already holding, no exit signal today
       {"action": "NONE"}                        - flat, no golden cross today (or nothing tradable)
-      {"action": "NONE", "reason": "market_filter_blocked"} - golden cross(es) fired, but
-                                                 MARKET_FILTER_SYMBOL is below its own SMA
+      {"action": "NONE", "reason": "market_filter_blocked"} - only possible if MARKET_FILTER_ENABLED
+                                                 is flipped back on (default False - see its docstring)
       {"skipped": "..."}                        - couldn't evaluate (no data yet, etc.)
       {"action": ..., "order_error": "..."}     - decision made, but the order submission raised
     """
@@ -584,7 +599,7 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
                 return await _exit_kd_position(settings, client, account, position, reason, str(latest_date))
         return {"action": "HOLD", "symbol": symbol, "trade_date": str(latest_date)}
 
-    if not _market_filter_ok(today_rows):
+    if MARKET_FILTER_ENABLED and not _market_filter_ok(today_rows):
         return {"action": "NONE", "trade_date": str(latest_date), "reason": "market_filter_blocked"}
 
     candidates = today_rows[

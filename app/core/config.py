@@ -42,7 +42,11 @@ class Settings(BaseSettings):
     price_history_movers_indices: str = Field("$DJI,$COMPX,$SPX", env="PRICE_HISTORY_MOVERS_INDICES")
     price_history_movers_sort: str = Field("VOLUME", env="PRICE_HISTORY_MOVERS_SORT")
     price_history_movers_frequency: int = Field(0, env="PRICE_HISTORY_MOVERS_FREQUENCY")
-    price_history_backfill_days: int = Field(60, env="PRICE_HISTORY_BACKFILL_DAYS")
+    # 400 calendar days (~280 trading days) rather than a tighter window so
+    # kd_watchlist's 200-trading-day trend-filter SMA has enough history to
+    # populate; K/D and ATR only need ~15-35 days but ride along on the same
+    # per-symbol backfill call.
+    price_history_backfill_days: int = Field(400, env="PRICE_HISTORY_BACKFILL_DAYS")
     # Fixed training-data universe (in addition to the movers-based daily
     # candidates above) — a flat JSON array of symbols, kept up to date by
     # hand. Backfilled every run alongside the movers universe so historical

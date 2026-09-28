@@ -127,6 +127,12 @@ async def run_once(settings: Optional[Settings] = None) -> dict:
         combined: dict[str, None] = {}
         for symbol in [*movers_universe, *fixed_universe]:
             combined.setdefault(symbol, None)
+        # kd_watchlist's market-level filter (recommend_action) needs this
+        # symbol's own daily bars in price_history to compute its SMA - added
+        # here so it's backfilled like any other symbol, then explicitly
+        # excluded from the candidate pool in kd_watchlist so it's never
+        # itself traded as a golden-cross signal.
+        combined.setdefault(kd_watchlist.MARKET_FILTER_SYMBOL, None)
         universe = list(combined.keys())
         result["combined_universe_size"] = len(universe)
 

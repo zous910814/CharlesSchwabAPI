@@ -140,7 +140,8 @@ def format_kd_recommendation_message(result: dict) -> str:
     elif action == "HOLD":
         lines.append(f"Holding {result['symbol']} - no exit signal today")
     elif action == "NONE":
-        lines.append("No golden cross today - stay flat")
+        reason = result.get("reason")
+        lines.append(f"No golden cross today - stay flat ({reason})" if reason else "No golden cross today - stay flat")
     elif result.get("skipped"):
         lines.append(f"Skipped: {result['skipped']}")
 

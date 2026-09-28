@@ -94,6 +94,33 @@ VOLUME_BASELINE_DAYS = 20
 ATR_STOP_MULT = 2.0
 MIN_CLOSE_PRICE = 5.0
 
+# Trend filter: only take a golden-cross entry if the stock's own close is
+# above its 200-day SMA - turns the KD rule from "buy any oversold bounce"
+# into "buy oversold pullbacks within an existing uptrend", which is what
+# backtests of this kind of rule actually rely on for their edge (a golden
+# cross in a downtrend just buys into a continuing slide).
+TREND_FILTER_SMA_PERIOD = 200
+
+# Market-level filter: block NEW entries (existing positions still exit
+# normally) unless this symbol's own close is above its SMA - a proxy for
+# "is the broad market itself in an uptrend". SPY over $SPX/$COMPX etc.
+# because it's an ordinary equity ticker, so it backfills through the exact
+# same price_history path as every other symbol with no special-casing.
+MARKET_FILTER_SYMBOL = "SPY"
+MARKET_FILTER_SMA_PERIOD = 60
+
+# Time stop: force-exit a position after this many trading days (counted off
+# price_history's own daily-bar calendar, not calendar days) if neither a
+# death cross nor the ATR stop has fired by then - a mean-reversion entry
+# that hasn't worked out within ~2 trading weeks is more likely chopping
+# sideways than "about to work", and tying up the account's one position
+# slot indefinitely on a stale signal has its own opportunity cost. Checked
+# once daily in recommend_action only (not check_intraday_exit) - unlike a
+# death cross or a stop being pierced, how many days a position has been
+# held doesn't change intraday, so there's nothing to react to faster than
+# once a day here.
+TIME_STOP_TRADING_DAYS = 10
+
 # Floor on shares bought, checked against current buying power BEFORE
 # picking among same-day golden-cross candidates (see recommend_action).
 # The real capital-tiering lever for small accounts: on a ~$1,000 account,
@@ -196,6 +223,17 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     df["daily_range_pct"] = (df["high"] - df["low"]) / df["close"]
     df["overnight_gap"] = df["open"] / prev_close - 1
+
+    # NaN (not enough history yet) compares False against a real close, so
+    # trend_ok/market filter checks below naturally fail closed during
+    # warm-up without any extra isna() handling.
+    df["sma_trend"] = g["close"].transform(
+        lambda s: s.rolling(TREND_FILTER_SMA_PERIOD, min_periods=TREND_FILTER_SMA_PERIOD).mean()
+    )
+    df["trend_ok"] = df["close"] > df["sma_trend"]
+    df["sma_market_filter"] = g["close"].transform(
+        lambda s: s.rolling(MARKET_FILTER_SMA_PERIOD, min_periods=MARKET_FILTER_SMA_PERIOD).mean()
+    )
 
     true_range = pd.concat(
         [df["high"] - df["low"], (df["high"] - prev_close).abs(), (df["low"] - prev_close).abs()],
@@ -465,15 +503,49 @@ async def ensure_stop_order(settings: Settings, client: SchwabClient) -> Optiona
         return None
 
 
+def _trading_days_held(all_dates: list, entry_date: Optional[str], latest_date) -> Optional[int]:
+    """Trading-day count from entry_date to latest_date (0 on the entry day
+    itself), counted off price_history's own daily-bar calendar (so weekends/
+    holidays are never counted) rather than calendar days. None if entry_date
+    isn't found in all_dates - e.g. a kd_entry logged before entry_date was
+    added, or entry_date has since aged out of the backfill window - in which
+    case the time stop just doesn't fire rather than raising."""
+    if not entry_date:
+        return None
+    date_strs = [str(d) for d in all_dates]
+    latest_str = str(latest_date)
+    if entry_date not in date_strs or latest_str not in date_strs:
+        return None
+    return date_strs.index(latest_str) - date_strs.index(entry_date)
+
+
+def _market_filter_ok(today_rows: pd.DataFrame) -> bool:
+    """True unless MARKET_FILTER_SYMBOL's own close is confirmed BELOW its
+    SMA today - fails open (permits entries) if that symbol's row is simply
+    missing or its SMA hasn't warmed up yet (NaN), since a data gap here
+    shouldn't silently disable all new entries the way an actual bear signal
+    should. Only gates new entries (recommend_action's candidate branch);
+    existing positions still exit normally regardless of market condition."""
+    row = today_rows[today_rows["symbol"] == MARKET_FILTER_SYMBOL]
+    if row.empty:
+        return True
+    row = row.iloc[0]
+    if pd.isna(row["sma_market_filter"]):
+        return True
+    return bool(row["close"] > row["sma_market_filter"])
+
+
 async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
     """Decides today's action AND submits the order via order_executor
     (dry-run or live per SCHWAB_DRY_RUN - see module docstring). Returns one of:
       {"action": "BUY", "symbol": ..., "entry_price": ..., "stop_price": ..., "shares": ...,
        "candidates": [...], "order": <submit_order's return>}
-      {"action": "SELL", "symbol": ..., "reason": "death_cross"|"stop_hit", "shares": ...,
+      {"action": "SELL", "symbol": ..., "reason": "death_cross"|"stop_hit"|"time_stop", "shares": ...,
        "order": <submit_order's return>}
       {"action": "HOLD", "symbol": ...}        - already holding, no exit signal today
       {"action": "NONE"}                        - flat, no golden cross today (or nothing tradable)
+      {"action": "NONE", "reason": "market_filter_blocked"} - golden cross(es) fired, but
+                                                 MARKET_FILTER_SYMBOL is below its own SMA
       {"skipped": "..."}                        - couldn't evaluate (no data yet, etc.)
       {"action": ..., "order_error": "..."}     - decision made, but the order submission raised
     """
@@ -505,12 +577,22 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
             row = row.iloc[0]
             stop_price = position.get("stop_price")
             stop_hit = stop_price is not None and row["low"] <= stop_price
-            if bool(row["death_cross"]) or stop_hit:
-                reason = "stop_hit" if stop_hit else "death_cross"
+            days_held = _trading_days_held(all_dates, position.get("entry_date"), latest_date)
+            time_stop = days_held is not None and days_held >= TIME_STOP_TRADING_DAYS
+            if bool(row["death_cross"]) or stop_hit or time_stop:
+                reason = "stop_hit" if stop_hit else "death_cross" if bool(row["death_cross"]) else "time_stop"
                 return await _exit_kd_position(settings, client, account, position, reason, str(latest_date))
         return {"action": "HOLD", "symbol": symbol, "trade_date": str(latest_date)}
 
-    candidates = today_rows[today_rows["golden_cross"] & (today_rows["close"] >= MIN_CLOSE_PRICE)]
+    if not _market_filter_ok(today_rows):
+        return {"action": "NONE", "trade_date": str(latest_date), "reason": "market_filter_blocked"}
+
+    candidates = today_rows[
+        today_rows["golden_cross"]
+        & (today_rows["close"] >= MIN_CLOSE_PRICE)
+        & today_rows["trend_ok"]
+        & (today_rows["symbol"] != MARKET_FILTER_SYMBOL)
+    ]
     if candidates.empty:
         return {"action": "NONE", "trade_date": str(latest_date)}
 

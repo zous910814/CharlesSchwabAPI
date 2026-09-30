@@ -192,6 +192,12 @@ async def run_daily_forever() -> None:
         return
     while True:
         await asyncio.sleep(_seconds_until_next_run(settings))
+        # Re-fetched after waking (same reasoning as monitor.py::run_forever) so
+        # a refresh_token renewed by auth.py's login callback during the sleep
+        # (up to ~24h) takes effect on this run instead of requiring a process
+        # restart - otherwise this loop keeps the refresh_token that was live
+        # when it started sleeping, potentially many hours stale.
+        settings = get_settings()
         now = datetime.now(MARKET_TZ)
         if now.weekday() >= 5:
             # No trading Sat/Sun, so the most recent daily bar (and thus any

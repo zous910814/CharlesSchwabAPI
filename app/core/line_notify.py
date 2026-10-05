@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
+import logging
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -13,6 +15,12 @@ from app.core.config import Settings
 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 LA_TZ = ZoneInfo("America/Los_Angeles")
+# Waits before each retry; ~11 min total, enough to ride out the DNS outages
+# seen on the VPS (2026-10-02 lasted ~9 min). Risk alerts are sent
+# fire-and-forget so this never delays trading; it only delays the daily job's
+# tail end, which nothing time-sensitive waits on.
+RETRY_DELAYS_SECONDS = (15, 45, 120, 480)
+logger = logging.getLogger(__name__)
 
 # (event_type, status) combos worth waking someone up for. "orb_exit" and
 # "order_result" are only risky for specific statuses, so those are handled
@@ -148,6 +156,18 @@ def format_kd_recommendation_message(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _is_retryable(exc: Exception) -> bool:
+    # Network-level failures (DNS - the VPS resolver has had brief outages,
+    # e.g. 2026-10-02 08:30-08:39 UTC, which silently ate that day's daily
+    # report - connection resets, timeouts) and LINE-side 429/5xx are worth
+    # retrying; any other 4xx (bad token, bad user id) won't fix itself.
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return False
+
+
 async def send_line_message(settings: Settings, text: str) -> None:
     if not settings.line_channel_access_token or not settings.line_user_id:
         return  # not configured yet — silent no-op, never blocks the caller
@@ -157,15 +177,38 @@ async def send_line_message(settings: Settings, text: str) -> None:
         "Content-Type": "application/json",
     }
     payload = {"to": settings.line_user_id, "messages": [{"type": "text", "text": text[:4900]}]}
+    last_exc: Optional[Exception] = None
+    for attempt, delay in enumerate((0, *RETRY_DELAYS_SECONDS)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(LINE_PUSH_URL, headers=headers, json=payload)
+                response.raise_for_status()
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            detail = f"{exc} | body: {exc.response.text[:300]}" if isinstance(exc, httpx.HTTPStatusError) else str(exc)
+            # logger, not print: under systemd stdout is block-buffered, so a
+            # print()ed failure only reached the journal hours later with the
+            # wrong timestamp.
+            logger.warning("[line_notify] send attempt %d failed: %s", attempt + 1, detail)
+            if not _is_retryable(exc):
+                break
+
+    # Never let a notification failure take down logging/trading. Recorded in
+    # activity_log so a dropped message is visible on the dashboard, not just
+    # in the journal; "line_send_failed" is deliberately not a risk event
+    # (is_risk_event), so this can't recurse into another LINE send.
+    from app.core import activity_log  # local import: activity_log imports this module
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(LINE_PUSH_URL, headers=headers, json=payload)
-            response.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        # Never let a notification failure take down logging/trading; this is
-        # intentionally not routed through activity_log.log_event() to avoid
-        # a retry loop if LINE itself is what's failing.
-        print(f"[line_notify] failed to send message: {exc}")
+        await activity_log.log_event(
+            event_type="line_send_failed", status="error",
+            detail={"text": text[:500]}, error=str(last_exc)[:500],
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("[line_notify] could not record line_send_failed")
 
 
 def verify_webhook_signature(channel_secret: str, body: bytes, signature: str) -> bool:

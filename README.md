@@ -2,41 +2,50 @@
 
 A FastAPI service that authenticates against the Charles Schwab trading API, runs a fully automated KD (stochastic %K/%D golden-cross/death-cross) swing strategy (one position at a time), places real broker-side stop orders, and exposes a dashboard + JSON API for monitoring. Runs 24/7 on a VPS via systemd, auto-deployed from `main`.
 
-## Project layout
-| Path | Description |
-| --- | --- |
-| `app/main.py` | FastAPI app; wires up routers, starts/stops the monitor loop and the daily data-pipeline loop, opens the activity log DB |
-| `app/core/config.py` | Settings loaded from env/.env via pydantic-settings (dry-run, risk limits, KD/ATR params, Postgres DSN, LINE creds) |
-| `app/core/activity_log.py` | SQLite-backed log of every order/signal/risk event (`activity_log.db`); feeds the dashboard's activity table |
-| `app/core/order_executor.py` | `submit_order()`: single choke point for manual + automated orders — dry-run gate, Schwab call, logging |
-| `app/core/monitor.py` | `run_forever()`: polls every `MONITOR_POLL_SECONDS` while the market is open; blanket stop-loss, daily-loss circuit breaker, KD intraday exit check |
-| `app/core/data_pipeline.py` | `run_daily_forever()`: once daily pre-market, builds the candidate universe, backfills price history + fundamentals into Postgres, then calls `kd_watchlist.recommend_action()` |
-| `app/core/kd_watchlist.py` | Authoritative once-daily BUY/SELL/HOLD/NONE decision for the KD strategy; submits real entry/exit/stop orders itself |
-| `app/core/account.py` | Parses Schwab account responses: buying power, equity, positions, day P&L |
-| `app/core/pnl.py` | Derives realized P&L per round trip from Schwab transactions (pairs each opening buy against its closing sell) |
-| `app/core/price_history_db.py` | Postgres-backed daily OHLCV storage (`price_history` table); no-ops if `PG_DSN` is unset |
-| `app/core/fundamentals_db.py` | Postgres-backed daily fundamentals snapshot, one row per (symbol, day) |
-| `app/core/deps.py` | Shared `SchwabClient` FastAPI dependency |
-| `app/core/line_notify.py` | LINE push notifications for risk events + webhook signature verification |
-| `app/clients/schwab.py` | Schwab API client: token refresh, code exchange, orders, account, quotes, price history, movers, fundamentals; self-throttles to 110 req/min |
-| `app/routers/accounts.py` | `GET /accounts/login` — starts the OAuth flow |
-| `app/routers/auth.py` | `GET /accounts/callback` — exchanges code for tokens, persists them, hot-applies the new token without a restart |
-| `app/routers/orders.py` | `POST /orders/{account_id}` — manual order endpoint, goes through `order_executor.submit_order` |
-| `app/routers/dashboard.py` | `GET /dashboard` plus `/api/activity`, `/api/monitor/{status,pause,resume}`, `/api/portfolio`, `/api/candles/{symbol}`, `/api/pnl/monthly`, `/api/price-history/{run-now,status}` |
-| `app/routers/line_webhook.py` | `POST /line/webhook` — one-time-use endpoint for discovering your own `LINE_USER_ID` |
-| `app/schemas/order.py` | `OrderRequest`/`OrderLeg`/`Instrument` pydantic models |
-| `app/strategy/kd.py` | `compute_kd()`: pure-Python stochastic %K/%D indicator calculation |
-| `app/templates/dashboard.html` | Dashboard page (vanilla HTML/JS, polls the API endpoints above) |
-| `watchlist.json` | Git-tracked but gitignored on the VPS side — the VPS's auto-deploy does `git reset --hard`, so editing locally and pushing is the only way changes stick |
-| `sp500_constituents.json` | Fixed S&P 500 constituent list, one input to the daily candidate universe alongside Schwab movers |
-| `scripts/` | Gitignored, local-only offline backtest/analysis tools; never deployed or imported by live code |
-| `docs/stock trading strategy.md` | The old ORB spec — ORB has been ripped out; kept only as historical reference |
-| `docs/VPS_OPERATIONS.md` | VPS deployment/ops runbook (gitignored, local reference only) |
-| `docs/BACKTEST_REPORT.md` | Watchlist regression + KD backtest findings |
-| `requirements.txt` | Python dependencies |
-| `.env` | Environment/config values |
-| `cert.pem` / `key.pem` | Local TLS certs for the HTTPS redirect URI |
-| `activity_log.db` | Created on first run; gitignored |
+## Contents
+
+```
+.
+├── README.md
+├── CLAUDE.md
+├── requirements.txt
+├── run.py
+├── sp500_constituents.json
+├── .env.example
+├── app
+│   ├── main.py
+│   ├── clients
+│   │   └── schwab.py
+│   ├── core
+│   │   ├── account.py
+│   │   ├── activity_log.py
+│   │   ├── config.py
+│   │   ├── data_pipeline.py
+│   │   ├── deps.py
+│   │   ├── fundamentals_db.py
+│   │   ├── kd_watchlist.py
+│   │   ├── line_notify.py
+│   │   ├── monitor.py
+│   │   ├── order_executor.py
+│   │   ├── pnl.py
+│   │   └── price_history_db.py
+│   ├── routers
+│   │   ├── accounts.py
+│   │   ├── auth.py
+│   │   ├── dashboard.py
+│   │   ├── line_webhook.py
+│   │   └── orders.py
+│   ├── schemas
+│   │   └── order.py
+│   ├── strategy
+│   │   └── kd.py
+│   └── templates
+│       └── dashboard.html
+└── docs
+    ├── BACKTEST_REPORT.md
+    ├── KD_RISK_CONTROLS_BACKTEST.md
+    └── stock trading strategy.md
+```
 
 ## Setup
 1) Python 3.10+ recommended. Install deps:

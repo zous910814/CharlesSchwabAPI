@@ -9,7 +9,7 @@ from typing import Any, Optional
 import aiosqlite
 
 from app.core.config import get_settings
-from app.core.line_notify import format_risk_message, is_risk_event, send_line_message
+from app.core.line_notify import claim_risk_alert, format_risk_message, is_risk_event, send_line_message
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = BASE_DIR / "activity_log.db"
@@ -61,7 +61,11 @@ async def log_event(
         await db.commit()
 
     if is_risk_event(event_type, status):
-        text = format_risk_message(event_type=event_type, symbol=symbol, status=status, detail=detail, error=error)
+        suppressed = claim_risk_alert(event_type, status, symbol)
+        if suppressed is None:
+            return  # same alert already pushed within the cooldown; still logged above
+        text = format_risk_message(event_type=event_type, symbol=symbol, status=status, detail=detail,
+                                   error=error, suppressed=suppressed)
         # Fire-and-forget: don't let notification delivery (or LINE being
         # slow/down) add latency to the trading loop that just logged this.
         asyncio.create_task(send_line_message(get_settings(), text))

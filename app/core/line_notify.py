@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import time
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -20,7 +21,18 @@ LA_TZ = ZoneInfo("America/Los_Angeles")
 # fire-and-forget so this never delays trading; it only delays the daily job's
 # tail end, which nothing time-sensitive waits on.
 RETRY_DELAYS_SECONDS = (15, 45, 120, 480)
+# A persistent failure (e.g. monitor_error on every poll) would otherwise push
+# once a minute and burn through the LINE plan's monthly message quota. Each
+# (event_type, status, symbol) gets at most one push per window; repeats inside
+# it are still written to activity_log, just not pushed, and the next push
+# reports how many were held back.
+RISK_ALERT_COOLDOWN_SECONDS = 600
 logger = logging.getLogger(__name__)
+
+# In-memory only, like the monitor's pause/circuit-breaker state: a restart
+# lets the first alert of each kind through again.
+_last_alert_sent: dict[tuple, float] = {}
+_suppressed_counts: dict[tuple, int] = {}
 
 # (event_type, status) combos worth waking someone up for. "orb_exit" and
 # "order_result" are only risky for specific statuses, so those are handled
@@ -48,6 +60,20 @@ def is_risk_event(event_type: str, status: Optional[str]) -> bool:
     return False
 
 
+def claim_risk_alert(event_type: str, status: Optional[str], symbol: Optional[str]) -> Optional[int]:
+    """Throttle gate for risk pushes. Returns None if an identical alert was
+    pushed within RISK_ALERT_COOLDOWN_SECONDS (caller should skip the push),
+    otherwise the number of identical alerts suppressed since the last push."""
+    key = (event_type, status, symbol)
+    now = time.monotonic()
+    last = _last_alert_sent.get(key)
+    if last is not None and now - last < RISK_ALERT_COOLDOWN_SECONDS:
+        _suppressed_counts[key] = _suppressed_counts.get(key, 0) + 1
+        return None
+    _last_alert_sent[key] = now
+    return _suppressed_counts.pop(key, 0)
+
+
 def format_risk_message(
     *,
     event_type: str,
@@ -55,9 +81,12 @@ def format_risk_message(
     status: Optional[str],
     detail: Any,
     error: Optional[str],
+    suppressed: int = 0,
 ) -> str:
     now = datetime.now(LA_TZ).strftime("%Y-%m-%d %H:%M:%S PT")
     lines = [f"[Schwab Bot Alert] {now}", f"Event: {event_type}" + (f" ({status})" if status else "")]
+    if suppressed:
+        lines.append(f"(+{suppressed} identical alerts in the last {RISK_ALERT_COOLDOWN_SECONDS // 60} min not pushed)")
     if symbol:
         lines.append(f"Symbol: {symbol}")
 

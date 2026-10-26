@@ -32,16 +32,26 @@ def _today_str() -> str:
     return datetime.now(MARKET_TZ).date().isoformat()
 
 
-def _trading_allowed(action: str) -> tuple[bool, Optional[str]]:
-    """action: 'buy' | 'sell' | 'stop_loss' | 'eod_flatten'. Manual pause blocks
-    everything except EOD flatten (never leave a position open overnight just
-    because the bot was paused); the circuit breaker only blocks new
-    speculative BUY/SELL, not protective stop-loss/flatten exits."""
-    if action == "eod_flatten":
+def trading_allowed(action: str) -> tuple[bool, Optional[str]]:
+    """action: 'entry' (new KD BUY) | 'signal_exit' (KD death-cross/time-stop
+    SELL) | 'protective' (KD stop_hit exit, placing the broker-side stop, the
+    blanket stop-loss). Protective orders are never blocked - pausing must
+    never mean riding a loss past its stop. Manual pause blocks entries and
+    signal exits; the circuit breaker blocks only new entries, since it trips
+    on a losing day and holding a losing long through its own exit signal
+    would add risk, not remove it.
+
+    KD entries only happen in the 04:30 ET pre-market job, and the breaker
+    only resets on the first market-hours poll of a new day - so in practice
+    a trip blocks the NEXT morning's entry, not just the rest of the trip day.
+
+    Passed into kd_watchlist as a callable rather than imported there, since
+    this module already imports kd_watchlist."""
+    if action == "protective":
         return True, None
     if STATE.get("manual_pause"):
         return False, "manual_pause"
-    if action in ("buy", "sell") and STATE["circuit_breaker"].get("tripped"):
+    if action == "entry" and STATE["circuit_breaker"].get("tripped"):
         return False, "circuit_breaker"
     return True, None
 
@@ -117,11 +127,9 @@ async def _update_circuit_breaker(settings: Settings, account: dict) -> None:
 
 async def _run_stop_losses(client: SchwabClient, settings: Settings, account: dict) -> None:
     """Blanket account-wide safety net: force-sell anything down more than
-    SCHWAB_STOP_LOSS_PCT from average cost, no matter the strategy."""
-    allowed, _ = _trading_allowed("stop_loss")
-    if not allowed:
-        return
-
+    SCHWAB_STOP_LOSS_PCT from average cost, no matter the strategy. Protective,
+    so neither manual pause nor the circuit breaker gates it (see
+    trading_allowed)."""
     for pos in parse_positions(account):
         symbol = pos["symbol"]
         quantity = pos["quantity"]
@@ -190,8 +198,10 @@ async def _poll_once(settings: Settings) -> None:
 
         if settings.kd_watchlist_enabled and price_history_db.is_ready():
             try:
-                kd_exit = await kd_watchlist.check_intraday_exit(settings, client)
-                if kd_exit is not None:
+                kd_exit = await kd_watchlist.check_intraday_exit(settings, client, trading_allowed)
+                # Only actual exits - a deferred/blocked one (HOLD) is re-returned
+                # every poll and already logs its own once-per-day event.
+                if kd_exit is not None and kd_exit.get("action") == "SELL":
                     await activity_log.log_event(
                         event_type="kd_intraday_exit", account_id=settings.schwab_account_id,
                         symbol=kd_exit.get("symbol"), status=kd_exit.get("reason"), detail=kd_exit,

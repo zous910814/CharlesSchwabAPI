@@ -43,10 +43,12 @@ _suppressed_counts: dict[tuple, int] = {}
 # kd_watchlist.ensure_stop_order). "kd_exit_deferred_pdt" fires when a
 # death-cross exit was skipped to avoid tripping the Pattern Day Trader flag
 # (see kd_watchlist._pdt_guard) - the position is still held, unexpectedly,
-# so it's worth knowing about even though nothing went wrong.
+# so it's worth knowing about even though nothing went wrong. "kd_blocked"
+# is the same idea for the manual pause / circuit breaker gate (see
+# kd_watchlist._blocked_by_gate): a KD entry or signal exit didn't happen.
 _ALWAYS_RISKY_EVENT_TYPES = {
     "stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted",
-    "kd_stop_placed", "kd_exit_deferred_pdt",
+    "kd_stop_placed", "kd_exit_deferred_pdt", "kd_blocked",
 }
 
 
@@ -175,10 +177,18 @@ def format_kd_recommendation_message(result: dict) -> str:
         if order_line:
             lines.append(order_line)
     elif action == "HOLD":
-        lines.append(f"Holding {result['symbol']} - no exit signal today")
+        if result.get("would_have_exited_for"):
+            lines.append(f"Holding {result['symbol']} - {result['would_have_exited_for']} exit held off "
+                          f"({result.get('reason')})")
+        else:
+            lines.append(f"Holding {result['symbol']} - no exit signal today")
     elif action == "NONE":
         reason = result.get("reason")
-        lines.append(f"No golden cross today - stay flat ({reason})" if reason else "No golden cross today - stay flat")
+        if result.get("blocked_candidates"):
+            lines.append(f"Golden cross today ({', '.join(result['blocked_candidates'])}) - "
+                          f"entry blocked by {reason}")
+        else:
+            lines.append(f"No golden cross today - stay flat ({reason})" if reason else "No golden cross today - stay flat")
     elif result.get("skipped"):
         lines.append(f"Skipped: {result['skipped']}")
 

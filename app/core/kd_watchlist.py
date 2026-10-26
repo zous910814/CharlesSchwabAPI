@@ -68,7 +68,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -156,6 +156,12 @@ PREDICT_FEATURE_COLUMNS = [
     "k", "d", "k_minus_d", "k_minus_d_change", "k_slope_3d", "days_in_oversold",
     "volume_ratio", "daily_range_pct", "overnight_gap",
 ]
+
+# action ('entry' | 'signal_exit' | 'protective') -> (allowed, blocking reason).
+# monitor.trading_allowed in production - the manual pause / circuit breaker
+# gate. Passed in by callers rather than imported, since monitor.py imports
+# this module.
+TradingGate = Callable[[str], tuple[bool, Optional[str]]]
 
 
 def _market_order(symbol: str, instruction: str, quantity: float) -> dict:
@@ -317,13 +323,49 @@ async def _pdt_guard(
     }
 
 
+async def _blocked_by_gate(
+    trading_allowed: TradingGate, action: str, symbol: Optional[str], trade_date: str, detail: dict,
+) -> Optional[str]:
+    """None if trading_allowed permits action; otherwise the blocking reason
+    ('manual_pause' | 'circuit_breaker'), after logging one kd_blocked event
+    per symbol/action/trade_date - check_intraday_exit asks again every ~60s
+    poll, so without the dedup a paused death cross would log (and push to
+    LINE) once a minute. Same dedup shape as _pdt_guard."""
+    allowed, why = trading_allowed(action)
+    if allowed:
+        return None
+    already = await activity_log.fetch_events(event_type="kd_blocked", symbol=symbol, limit=1)
+    last = (already[0].get("detail") or {}) if already else {}
+    if not (last.get("trade_date") == trade_date and last.get("action") == action):
+        await activity_log.log_event(
+            event_type="kd_blocked", symbol=symbol, status=why,
+            detail={"action": action, "trade_date": trade_date, **detail},
+        )
+    return why
+
+
 async def _exit_kd_position(
     settings: Settings, client: SchwabClient, account: dict, position: dict, reason: str, trade_date: str,
+    trading_allowed: TradingGate,
 ) -> dict:
     """Cancels the resting broker-side stop (if any) and market-sells the
     full held quantity. Shared by recommend_action's once-daily SELL branch
     and check_intraday_exit's faster same-day check, so both exit paths stay
-    in sync instead of drifting apart."""
+    in sync instead of drifting apart.
+
+    stop_hit is protective and always goes through; a death_cross/time_stop
+    exit is held off while manually paused - the resting broker-side stop
+    stays in place, so real downside is still covered."""
+    gate_action = "protective" if reason == "stop_hit" else "signal_exit"
+    blocked = await _blocked_by_gate(
+        trading_allowed, gate_action, position["symbol"], trade_date, {"would_have_exited_for": reason}
+    )
+    if blocked is not None:
+        return {
+            "action": "HOLD", "symbol": position["symbol"], "reason": blocked,
+            "would_have_exited_for": reason, "trade_date": trade_date,
+        }
+
     deferred = await _pdt_guard(settings, account, position, reason, trade_date)
     if deferred is not None:
         return deferred
@@ -361,7 +403,9 @@ async def _exit_kd_position(
     return result
 
 
-async def check_intraday_exit(settings: Settings, client: SchwabClient) -> Optional[dict]:
+async def check_intraday_exit(
+    settings: Settings, client: SchwabClient, trading_allowed: TradingGate,
+) -> Optional[dict]:
     """Same death-cross/ATR-stop exit check recommend_action does once a day
     off last night's finalized close, but run from monitor.py's ~60s poll
     loop off TODAY'S still-forming daily bar instead — so a death cross (or
@@ -425,7 +469,7 @@ async def check_intraday_exit(settings: Settings, client: SchwabClient) -> Optio
 
     reason = "stop_hit" if stop_hit else "death_cross"
     trade_date = datetime.now(MARKET_TZ).date().isoformat()
-    result = await _exit_kd_position(settings, client, account, position, reason, trade_date)
+    result = await _exit_kd_position(settings, client, account, position, reason, trade_date, trading_allowed)
     result["intraday"] = True
     return result
 
@@ -550,7 +594,7 @@ def _market_filter_ok(today_rows: pd.DataFrame) -> bool:
     return bool(row["close"] > row["sma_market_filter"])
 
 
-async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
+async def recommend_action(settings: Settings, client: SchwabClient, trading_allowed: TradingGate) -> dict:
     """Decides today's action AND submits the order via order_executor
     (dry-run or live per SCHWAB_DRY_RUN - see module docstring). Returns one of:
       {"action": "BUY", "symbol": ..., "entry_price": ..., "stop_price": ..., "shares": ...,
@@ -558,6 +602,10 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
       {"action": "SELL", "symbol": ..., "reason": "death_cross"|"stop_hit"|"time_stop", "shares": ...,
        "order": <submit_order's return>}
       {"action": "HOLD", "symbol": ...}        - already holding, no exit signal today
+      {"action": "HOLD", "symbol": ..., "reason": "manual_pause"|"pdt_guard_deferred",
+       "would_have_exited_for": ...}           - exit signal today, but held off
+      {"action": "NONE", "reason": "manual_pause"|"circuit_breaker", "blocked_candidates": [...]}
+                                                - golden cross today, but new entries are blocked
       {"action": "NONE"}                        - flat, no golden cross today (or nothing tradable)
       {"action": "NONE", "reason": "market_filter_blocked"} - only possible if MARKET_FILTER_ENABLED
                                                  is flipped back on (default False - see its docstring)
@@ -596,7 +644,9 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
             time_stop = days_held is not None and days_held >= TIME_STOP_TRADING_DAYS
             if bool(row["death_cross"]) or stop_hit or time_stop:
                 reason = "stop_hit" if stop_hit else "death_cross" if bool(row["death_cross"]) else "time_stop"
-                return await _exit_kd_position(settings, client, account, position, reason, str(latest_date))
+                return await _exit_kd_position(
+                    settings, client, account, position, reason, str(latest_date), trading_allowed
+                )
         return {"action": "HOLD", "symbol": symbol, "trade_date": str(latest_date)}
 
     if MARKET_FILTER_ENABLED and not _market_filter_ok(today_rows):
@@ -610,6 +660,15 @@ async def recommend_action(settings: Settings, client: SchwabClient) -> dict:
     ]
     if candidates.empty:
         return {"action": "NONE", "trade_date": str(latest_date)}
+
+    blocked = await _blocked_by_gate(
+        trading_allowed, "entry", None, str(latest_date), {"candidates": candidates["symbol"].tolist()}
+    )
+    if blocked is not None:
+        return {
+            "action": "NONE", "trade_date": str(latest_date), "reason": blocked,
+            "blocked_candidates": candidates["symbol"].tolist(),
+        }
 
     # `candidates` stays the FULL set of today's crosses for reporting
     # (kd_entry's "candidates" field, the "other crosses not picked" LINE

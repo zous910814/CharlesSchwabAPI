@@ -86,10 +86,15 @@ call `SchwabClient` directly, to keep dry-run gating and logging consistent.
 ### Risk controls (account-wide, strategy-agnostic, all in `app/core/monitor.py`)
 
 Blanket stop-loss (`SCHWAB_STOP_LOSS_PCT`, force-sells any position down that much from average
-cost) and a daily-loss circuit breaker (`SCHWAB_DAILY_LOSS_LIMIT_PCT`, pauses new BUY/SELL for the
-rest of the day) apply across *everything held*, independent of what bought it. Manual pause
-(`POST /api/monitor/pause`) blocks everything except EOD-type protective exits; both pause and
-circuit-breaker state are **in-memory only** — reset on restart (including `--reload`).
+cost) applies across *everything held*, independent of what bought it. `monitor.trading_allowed()`
+is the one gate for manual pause (`POST /api/monitor/pause`) and the daily-loss circuit breaker
+(`SCHWAB_DAILY_LOSS_LIMIT_PCT`), passed into `kd_watchlist` as a callable (importing `monitor` there
+would be circular). Protective orders — KD `stop_hit` exits, placing the broker-side stop, the
+blanket stop-loss — are never blocked. Manual pause blocks KD entries and signal exits
+(death cross / time stop); the breaker blocks only KD entries, and since it resets on the first
+market-hours poll of the next day, a trip effectively skips the next 04:30 entry. Blocks log a
+deduped `kd_blocked` event (LINE-pushed). Both pause and circuit-breaker state are **in-memory
+only** — reset on restart (including `--reload` and every auto-deploy).
 
 ### Data layer
 

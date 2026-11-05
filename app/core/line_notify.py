@@ -159,7 +159,8 @@ def format_kd_recommendation_message(result: dict) -> str:
         stop_distance = result["entry_price"] - result["stop_price"]
         lines.append(f"BUY {result.get('shares', 0)} {result['symbol']}")
         lines.append(f"Sizing reference (signal-day close): {result['entry_price']:.2f}, "
-                      f"stop {stop_distance:.2f} below fill (2x ATR14={result['atr14']:.2f})")
+                      f"stop {stop_distance:.2f} below fill ({stop_distance / result['atr14']:.0f}x ATR14={result['atr14']:.2f}, "
+                      f"re-anchored to the actual fill price once it fills)")
         if order_line:
             lines.append(order_line)
         elif result.get("reason") == "insufficient_buying_power":

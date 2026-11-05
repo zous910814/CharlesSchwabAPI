@@ -18,7 +18,7 @@ future changes to this file. A LINE message
 happened either way.
 
 v2: a live BUY also places a real resting SELL STOP at the broker (see
-_stop_order) for the ATR(14)*2 stop, cancelled and replaced by a market
+_stop_order) for the ATR(14)*ATR_STOP_MULT stop, cancelled and replaced by a market
 SELL on a death-cross exit. Before this, the stop was only a value this
 module rechecked once a day against the prior day's low — real protection
 only as timely as the next scheduled run, not the moment the price actually
@@ -41,7 +41,7 @@ rule with several variants — app/strategy/kd.py's golden-cross-in-oversold
 rule, long-only, was the only one with a demonstrated edge on a large sample
 (~2,300 trades). This ports that rule to production, sized for a small
 single-position account (one holding at a time, matching the $800-account
-backtest that motivated adding a stop) with an ATR(14)*2 stop-loss. NONE of
+backtest that motivated adding a stop) with an ATR(14)-multiple stop-loss. NONE of
 that backtesting involved a single live or paper trade — this is the first
 time the rule has ever touched a real (if preview-only, for now) order.
 
@@ -91,14 +91,30 @@ OVERSOLD = 20.0
 OVERBOUGHT = 80.0
 ATR_WINDOW = 14
 VOLUME_BASELINE_DAYS = 20
-ATR_STOP_MULT = 2.0
 MIN_CLOSE_PRICE = 5.0
 
+# 2026-11-05 retune ("plan C5" in scripts/backtest_kd_solutions.py), after
+# two live stop-outs in two days. Re-backtested on 2025-05..2026-11 daily
+# bars (508 symbols) with gap-through stop fills: the previous config (2 ATR,
+# 10-day time stop, SMA200 filter) averaged -0.07%/trade (558 trades) and
+# lost money in 3 of 4 sub-periods; 3 ATR + 20-day time stop + no trend
+# filter averaged +1.29%/trade (2,529 trades, t=5.9), positive in all 4
+# sub-periods, and the neighbouring parameters (2.5-4 ATR, 15-30 days) were
+# a smooth plateau, not a lone spike. HONEST CAVEAT from the same run:
+# random entries with these exits made +0.97%/trade - most of the gain is
+# holding longer through an 18-month up-market on today's (survivor) S&P
+# 500, not the golden cross picking winners. monitor.py's blanket
+# SCHWAB_STOP_LOSS_PCT (10% default) still caps this stop on volatile names;
+# backtested with that cap: +1.11%/trade, single-account outcome unchanged.
+ATR_STOP_MULT = 3.0
+
 # Trend filter: only take a golden-cross entry if the stock's own close is
-# above its 200-day SMA - turns the KD rule from "buy any oversold bounce"
-# into "buy oversold pullbacks within an existing uptrend", which is what
-# backtests of this kind of rule actually rely on for their edge (a golden
-# cross in a downtrend just buys into a continuing slide).
+# above its 200-day SMA. TREND_FILTER_ENABLED default False (2026-11-05): in
+# the re-backtest above it made results WORSE in the two most recent
+# sub-periods under both the old and new exits (e.g. 3ATR/20d: +0.49%/-0.20%
+# per trade with it vs +1.72%/+1.23% without). Left wired up, same pattern as
+# MARKET_FILTER_ENABLED below.
+TREND_FILTER_ENABLED = False
 TREND_FILTER_SMA_PERIOD = 200
 
 # Market-level filter: block NEW entries (existing positions still exit
@@ -133,8 +149,8 @@ MARKET_FILTER_SMA_PERIOD = 60
 # once daily in recommend_action only (not check_intraday_exit) - unlike a
 # death cross or a stop being pierced, how many days a position has been
 # held doesn't change intraday, so there's nothing to react to faster than
-# once a day here.
-TIME_STOP_TRADING_DAYS = 10
+# once a day here. 10 -> 20 on 2026-11-05, see ATR_STOP_MULT's comment.
+TIME_STOP_TRADING_DAYS = 20
 
 # Floor on shares bought, checked against current buying power BEFORE
 # picking among same-day golden-cross candidates (see recommend_action).
@@ -495,17 +511,29 @@ async def _current_kd_position() -> Optional[dict]:
     detail = latest_entry.get("detail") or {}
     symbol = latest_entry.get("symbol")
     stop_order_id = detail.get("stop_order_id")
+    entry_price = detail.get("entry_price")
+    stop_price = detail.get("stop_price")
     if stop_order_id is None:
         stop_events = await activity_log.fetch_events(
             event_type="kd_stop_placed", symbol=symbol, status="placed", limit=1
         )
         if stop_events and stop_events[0]["id"] > latest_entry["id"]:
-            stop_order_id = (stop_events[0].get("detail") or {}).get("stop_order_id")
+            stop_detail = stop_events[0].get("detail") or {}
+            stop_order_id = stop_detail.get("stop_order_id")
+            # Once the stop is placed, its fill-based stop_price (see
+            # ensure_stop_order) is the real one - the intraday/daily
+            # stop_hit checks must use it too, or they'd market-sell at the
+            # stale signal-close-based level the broker stop was moved off of.
+            if stop_detail.get("stop_price") is not None:
+                stop_price = stop_detail["stop_price"]
+            if stop_detail.get("fill_price") is not None:
+                entry_price = stop_detail["fill_price"]
 
     return {
         "symbol": symbol,
-        "entry_price": detail.get("entry_price"),
-        "stop_price": detail.get("stop_price"),
+        "entry_price": entry_price,
+        "stop_price": stop_price,
+        "atr14": detail.get("atr14"),
         "entry_date": detail.get("entry_date"),
         "stop_order_id": stop_order_id,
         "dry_run": bool(detail.get("dry_run")),
@@ -542,7 +570,25 @@ async def ensure_stop_order(settings: Settings, client: SchwabClient) -> Optiona
     if quantity <= 0:
         return None  # BUY hasn't filled yet (or never will) - retry next poll
 
-    stop_body = _stop_order(symbol, quantity, position["stop_price"])
+    # Re-anchor the stop to the ACTUAL fill: kd_entry's stop_price is off the
+    # signal day's close (the only price known pre-market), but the backtest
+    # (scripts/backtest_kd_daily.py) sets stop = next-open fill - N*ATR. On a
+    # gap-down open the signal-close stop sits much closer than N*ATR to the
+    # real entry (live 2026-11-05 CSCO: ~1.0 ATR vs the intended 2) and gets
+    # shaken out on noise.
+    fill_price = next(
+        (p.get("average_price") for p in parse_positions(account) if p["symbol"] == symbol), None
+    )
+    atr = position.get("atr14")
+    stop_price = position["stop_price"]
+    if isinstance(fill_price, (int, float)) and fill_price > 0 and atr:
+        stop_price = float(fill_price) - ATR_STOP_MULT * float(atr)
+    else:
+        fill_price = None  # fall back to the signal-close stop rather than placing none
+
+    stop_detail = {"quantity": quantity, "stop_price": stop_price, "fill_price": fill_price,
+                   "signal_stop_price": position["stop_price"]}
+    stop_body = _stop_order(symbol, quantity, stop_price)
     try:
         stop_result = await submit_order(
             client=client, settings=settings, account_id=settings.schwab_account_id,
@@ -551,13 +597,13 @@ async def ensure_stop_order(settings: Settings, client: SchwabClient) -> Optiona
         stop_order_id = _extract_order_id(stop_result)
         await activity_log.log_event(
             event_type="kd_stop_placed", symbol=symbol, status="placed",
-            detail={"stop_order_id": stop_order_id, "quantity": quantity, "stop_price": position["stop_price"]},
+            detail={"stop_order_id": stop_order_id, **stop_detail},
         )
-        return {"symbol": symbol, "stop_order_id": stop_order_id, "quantity": quantity}
+        return {"symbol": symbol, "stop_order_id": stop_order_id, **stop_detail}
     except Exception as exc:  # noqa: BLE001
         await activity_log.log_event(
             event_type="kd_stop_placed", symbol=symbol, status="error",
-            detail={"quantity": quantity, "stop_price": position["stop_price"]}, error=str(exc),
+            detail=stop_detail, error=str(exc),
         )
         return None
 
@@ -655,7 +701,7 @@ async def recommend_action(settings: Settings, client: SchwabClient, trading_all
     candidates = today_rows[
         today_rows["golden_cross"]
         & (today_rows["close"] >= MIN_CLOSE_PRICE)
-        & today_rows["trend_ok"]
+        & (today_rows["trend_ok"] | (not TREND_FILTER_ENABLED))
         & (today_rows["symbol"] != MARKET_FILTER_SYMBOL)
     ]
     if candidates.empty:

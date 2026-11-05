@@ -61,7 +61,12 @@ everywhere) — nothing crashes, the app just runs with monitoring/risk-controls
   for the offline validation, ~0.97 AUC).
 - **Sizing**: `BUY_ALLOCATION_PCT` (0.97) of current buying power / signal-day close as a price
   estimate (order is a MARKET order, so real fill price is unknown ahead of time).
-- **Stop**: `entry_price - ATR_STOP_MULT(2.0) * ATR(14)`. v2 places a **real resting SELL STOP
+- **Filters/exits** (retuned 2026-11-05 via `scripts/backtest_kd_solutions.py`, see the comment on
+  `ATR_STOP_MULT`): 3 ATR stop, 20-trading-day time stop, SMA200 trend filter **off**
+  (`TREND_FILTER_ENABLED`). That same backtest found random entries with these exits earn most of
+  the same return — don't read the golden cross itself as a proven stock-picking edge.
+- **Stop**: `actual fill price - ATR_STOP_MULT(3.0) * ATR(14)` — computed in `ensure_stop_order`
+  once the BUY fills (the signal-day close is only the pre-market sizing estimate). v2 places a **real resting SELL STOP
   order at the broker** (`GOOD_TILL_CANCEL`), not just a value re-checked once a day — see
   `_stop_order()`.
 - **Exit**: death cross (K crosses below D while K > 80) or the stop being hit, checked once daily

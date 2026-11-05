@@ -197,6 +197,19 @@ async def _poll_once(settings: Settings) -> None:
             await _run_stop_losses(client, settings, account_snapshot)
 
         if settings.kd_watchlist_enabled and price_history_db.is_ready():
+            # Places the resting stop for a still-pending KD entry the moment
+            # its BUY actually fills - see kd_watchlist.ensure_stop_order.
+            # Runs BEFORE check_intraday_exit so that check already sees the
+            # fill-based stop_price on the first poll after the fill, not the
+            # tighter signal-close one it replaces.
+            try:
+                await kd_watchlist.ensure_stop_order(settings, client)
+            except Exception as exc:  # noqa: BLE001
+                await activity_log.log_event(
+                    event_type="monitor_error", status="error",
+                    detail={"phase": "kd_ensure_stop_order"}, error=str(exc),
+                )
+
             try:
                 kd_exit = await kd_watchlist.check_intraday_exit(settings, client, trading_allowed)
                 # Only actual exits - a deferred/blocked one (HOLD) is re-returned
@@ -210,16 +223,6 @@ async def _poll_once(settings: Settings) -> None:
                 await activity_log.log_event(
                     event_type="monitor_error", status="error",
                     detail={"phase": "kd_intraday_exit"}, error=str(exc),
-                )
-
-            # Places the resting stop for a still-pending KD entry the moment
-            # its BUY actually fills - see kd_watchlist.ensure_stop_order.
-            try:
-                await kd_watchlist.ensure_stop_order(settings, client)
-            except Exception as exc:  # noqa: BLE001
-                await activity_log.log_event(
-                    event_type="monitor_error", status="error",
-                    detail={"phase": "kd_ensure_stop_order"}, error=str(exc),
                 )
     finally:
         await client.aclose()

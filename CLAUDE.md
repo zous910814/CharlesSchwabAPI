@@ -59,8 +59,12 @@ everywhere) — nothing crashes, the app just runs with monitoring/risk-controls
   the prior day's state) picks the one most likely to have crossed — a tie-break only, not a
   timing signal (see the module's long docstring for the reasoning and `scripts/backtest_kd_predict.py`
   for the offline validation, ~0.97 AUC).
-- **Sizing**: `BUY_ALLOCATION_PCT` (0.97) of current buying power / signal-day close as a price
-  estimate (order is a MARKET order, so real fill price is unknown ahead of time).
+- **Entry order** (since 2026-11-06): DAY **LIMIT** BUY at `signal-day close - ENTRY_LIMIT_ATR_OFFSET
+  (0.5) * ATR(14)`, sized `BUY_ALLOCATION_PCT` (0.97) of buying power / limit price. Fills only ~37%
+  of signals (`scripts/backtest_kd_entry_price.py`) — an unfilled one expires at the close, the next
+  run logs `kd_entry_unfilled` and treats the account as flat. `recommend_action` refuses to send a
+  second BUY for a signal date it already acted on (`entry_already_submitted`), since an unfilled
+  limit leaves the symbol un-held where the old MARKET entry always filled.
 - **Filters/exits** (retuned 2026-11-05/06, see the comments on `ATR_STOP_MULT` and
   `TREND_FILTER_ENABLED`): 3 ATR stop, 20-trading-day time stop, SMA200 trend filter **on**.
   Validated on 2000-2026 daily bars (`scripts/backtest_kd_long.py`, data in the gitignored

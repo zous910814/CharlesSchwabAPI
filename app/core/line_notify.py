@@ -154,12 +154,23 @@ def format_kd_recommendation_message(result: dict) -> str:
     elif result.get("order_error"):
         order_line = f"Order FAILED: {result['order_error'][:200]}"
 
+    prev = result.get("previous_entry_unfilled")
+    if prev:
+        limit_s = f" @ {prev['limit_price']:.2f}" if prev.get("limit_price") else ""
+        lines.append(f"Previous limit BUY {prev['symbol']}{limit_s} did not fill - expired at the close, skipped")
+
     action = result.get("action")
     if action == "BUY":
-        stop_distance = result["entry_price"] - result["stop_price"]
-        lines.append(f"BUY {result.get('shares', 0)} {result['symbol']}")
-        lines.append(f"Sizing reference (signal-day close): {result['entry_price']:.2f}, "
-                      f"stop {stop_distance:.2f} below fill ({stop_distance / result['atr14']:.0f}x ATR14={result['atr14']:.2f}, "
+        limit = result.get("limit_price")
+        ref = limit if limit is not None else result["entry_price"]
+        stop_distance = ref - result["stop_price"]
+        if limit is not None:
+            lines.append(f"LIMIT BUY {result.get('shares', 0)} {result['symbol']} @ {limit:.2f} "
+                          f"(signal close {result['entry_price']:.2f} - {(result['entry_price'] - limit) / result['atr14']:.1f}x ATR14; "
+                          f"DAY order - auto-cancelled at the close if it doesn't fill)")
+        else:
+            lines.append(f"BUY {result.get('shares', 0)} {result['symbol']}")
+        lines.append(f"Stop {stop_distance:.2f} below the fill ({stop_distance / result['atr14']:.0f}x ATR14={result['atr14']:.2f}, "
                       f"re-anchored to the actual fill price once it fills)")
         if order_line:
             lines.append(order_line)
@@ -188,6 +199,8 @@ def format_kd_recommendation_message(result: dict) -> str:
         if result.get("blocked_candidates"):
             lines.append(f"Golden cross today ({', '.join(result['blocked_candidates'])}) - "
                           f"entry blocked by {reason}")
+        elif reason == "entry_already_submitted":
+            lines.append(f"Entry for {result.get('symbol')} on this signal date was already submitted - not re-sending")
         else:
             lines.append(f"No golden cross today - stay flat ({reason})" if reason else "No golden cross today - stay flat")
     elif result.get("skipped"):

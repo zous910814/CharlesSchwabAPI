@@ -178,6 +178,19 @@ MIN_SHARES = 2
 # make the order cost more than the account actually has.
 BUY_ALLOCATION_PCT = 0.97
 
+# Entry is a LIMIT BUY at (signal-day close - ENTRY_LIMIT_ATR_OFFSET * ATR14),
+# DAY duration: fills at the open if the stock opens at/below the limit,
+# intraday if it trades down to it, and Schwab cancels it at the close
+# otherwise - the signal is then simply skipped (logged as kd_entry_unfilled).
+# Chosen 2026-11-06 by the user ("buy cheap, don't buy high, OK to miss
+# often") from scripts/backtest_kd_entry_price.py, 2000-2026: fills ~37% of
+# signals at ~1.4% below the signal close; per-trade avg better than the old
+# MARKET-at-open entry in all three decades (+1.52/+1.57/+1.37% vs
+# +1.13/+1.46/+1.09%), but the one-position account came out mixed (26y
+# CAGR ~+11.7% vs +13.4%, maxDD -55% vs -60%) because missed signals leave
+# the account idle - a deliberate trade-off, not a free improvement.
+ENTRY_LIMIT_ATR_OFFSET = 0.5
+
 PREDICT_FEATURE_COLUMNS = [
     "k", "d", "k_minus_d", "k_minus_d_change", "k_slope_3d", "days_in_oversold",
     "volume_ratio", "daily_range_pct", "overnight_gap",
@@ -198,6 +211,21 @@ def _market_order(symbol: str, instruction: str, quantity: float) -> dict:
         "session": "NORMAL",
         "duration": "DAY",
         "orderStrategyType": "SINGLE",
+        "orderLegCollection": [
+            {"instruction": instruction, "quantity": quantity, "instrument": {"symbol": symbol, "assetType": "EQUITY"}}
+        ],
+    }
+
+
+def _limit_order(symbol: str, instruction: str, quantity: float, limit_price: float) -> dict:
+    """DAY limit order - Schwab cancels whatever hasn't filled at the close,
+    so an unfilled KD entry never lingers into the next session."""
+    return {
+        "orderType": "LIMIT",
+        "session": "NORMAL",
+        "duration": "DAY",
+        "orderStrategyType": "SINGLE",
+        "price": f"{limit_price:.2f}",
         "orderLegCollection": [
             {"instruction": instruction, "quantity": quantity, "instrument": {"symbol": symbol, "assetType": "EQUITY"}}
         ],
@@ -544,6 +572,7 @@ async def _current_kd_position() -> Optional[dict]:
         "entry_price": entry_price,
         "stop_price": stop_price,
         "atr14": detail.get("atr14"),
+        "limit_price": detail.get("limit_price"),  # None on MARKET-entry rows logged before 2026-11-06
         "entry_date": detail.get("entry_date"),
         "stop_order_id": stop_order_id,
         "dry_run": bool(detail.get("dry_run")),
@@ -650,11 +679,31 @@ def _market_filter_ok(today_rows: pd.DataFrame) -> bool:
     return bool(row["close"] > row["sma_market_filter"])
 
 
+async def _note_unfilled_entry(position: dict) -> Optional[dict]:
+    """The latest kd_entry's symbol isn't held and no stop was ever placed
+    for it (ensure_stop_order places one the moment a fill shows up), and its
+    DAY limit order's session is over - so the limit expired unfilled. Logs
+    one kd_entry_unfilled event per entry (this is re-checked every daily
+    run until the next kd_entry) and returns its detail only when newly
+    logged, so the morning LINE message mentions it once."""
+    detail = {"entry_date": position.get("entry_date"), "limit_price": position.get("limit_price")}
+    already = await activity_log.fetch_events(event_type="kd_entry_unfilled", symbol=position["symbol"], limit=1)
+    if already and (already[0].get("detail") or {}).get("entry_date") == detail["entry_date"]:
+        return None
+    await activity_log.log_event(event_type="kd_entry_unfilled", symbol=position["symbol"], status="expired",
+                                 detail=detail)
+    return {"symbol": position["symbol"], **detail}
+
+
 async def recommend_action(settings: Settings, client: SchwabClient, trading_allowed: TradingGate) -> dict:
     """Decides today's action AND submits the order via order_executor
-    (dry-run or live per SCHWAB_DRY_RUN - see module docstring). Returns one of:
-      {"action": "BUY", "symbol": ..., "entry_price": ..., "stop_price": ..., "shares": ...,
+    (dry-run or live per SCHWAB_DRY_RUN - see module docstring). Returns one of
+    the shapes below, plus "previous_entry_unfilled": {...} on the first run
+    after a limit BUY expired without filling:
+      {"action": "BUY", "symbol": ..., "entry_price": ..., "limit_price": ..., "stop_price": ..., "shares": ...,
        "candidates": [...], "order": <submit_order's return>}
+      {"action": "NONE", "reason": "entry_already_submitted"} - this signal date already got its BUY
+                                                 (non-trading weekday / latest bar didn't advance)
       {"action": "SELL", "symbol": ..., "reason": "death_cross"|"stop_hit"|"time_stop", "shares": ...,
        "order": <submit_order's return>}
       {"action": "HOLD", "symbol": ...}        - already holding, no exit signal today
@@ -689,6 +738,28 @@ async def recommend_action(settings: Settings, client: SchwabClient, trading_all
         return {"skipped": f"account_fetch_failed: {exc}"}
     held_symbols = {p["symbol"] for p in parse_positions(account)}
 
+    unfilled = None
+    if position is not None and position["symbol"] not in held_symbols:
+        # A limit BUY for this exact signal date already went out (a weekday
+        # market holiday, or the backfill didn't advance the latest bar) -
+        # don't send the same entry twice. With the old MARKET entry this
+        # couldn't happen: the order always filled, so the symbol was held.
+        if position.get("entry_date") == str(latest_date):
+            return {"action": "NONE", "trade_date": str(latest_date), "reason": "entry_already_submitted",
+                    "symbol": position["symbol"]}
+        if not position.get("stop_order_id") and not position.get("dry_run") and position.get("limit_price"):
+            unfilled = await _note_unfilled_entry(position)
+
+    result = await _decide(settings, client, trading_allowed, df, all_dates, latest_date, today_rows,
+                           position, account, held_symbols)
+    if unfilled:
+        result["previous_entry_unfilled"] = unfilled
+    return result
+
+
+async def _decide(settings: Settings, client: SchwabClient, trading_allowed: TradingGate, df: pd.DataFrame,
+                  all_dates: list, latest_date, today_rows: pd.DataFrame, position: Optional[dict],
+                  account: dict, held_symbols: set) -> dict:
     if position is not None and position["symbol"] in held_symbols:
         symbol = position["symbol"]
         row = today_rows[today_rows["symbol"] == symbol]
@@ -759,25 +830,28 @@ async def recommend_action(settings: Settings, client: SchwabClient, trading_all
     if pd.isna(atr) or atr <= 0:
         return {"action": "NONE", "trade_date": str(latest_date), "reason": "no_atr_yet"}
 
-    # entry_price is the SIGNAL day's close, a proxy for sizing only - the
-    # order below is a MARKET order, so the real fill price is whatever the
-    # market gives once it opens, same "fills at next day's open" assumption
-    # the backtest used. BUY_ALLOCATION_PCT<1 leaves room for that estimate
-    # being slightly off.
+    # entry_price is the SIGNAL day's close; the order is a DAY LIMIT at
+    # ENTRY_LIMIT_ATR_OFFSET ATR below it (see that constant). A limit fill is
+    # at or below limit_price, so sizing off limit_price can't overspend.
+    # stop_price here is only the pre-fill estimate - ensure_stop_order
+    # re-anchors it to the actual average fill price.
     entry_price = float(chosen["close"])
-    stop_price = entry_price - ATR_STOP_MULT * float(atr)
+    limit_price = round(entry_price - ENTRY_LIMIT_ATR_OFFSET * float(atr), 2)
+    if limit_price <= 0:
+        return {"action": "NONE", "trade_date": str(latest_date), "reason": "limit_price_nonpositive"}
+    stop_price = limit_price - ATR_STOP_MULT * float(atr)
     symbol = str(chosen["symbol"])
 
-    shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / entry_price) if buying_power else 0
+    shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / limit_price) if buying_power else 0
 
     result = {
-        "action": "BUY", "symbol": symbol, "entry_price": entry_price, "stop_price": stop_price,
-        "atr14": float(atr), "shares": shares, "buying_power": buying_power,
+        "action": "BUY", "symbol": symbol, "entry_price": entry_price, "limit_price": limit_price,
+        "stop_price": stop_price, "atr14": float(atr), "shares": shares, "buying_power": buying_power,
         "candidates": candidates["symbol"].tolist(), "trade_date": str(latest_date),
     }
     is_dry_run = False
     if shares >= 1:
-        order_body = _market_order(symbol, "BUY", shares)
+        order_body = _limit_order(symbol, "BUY", shares, limit_price)
         try:
             result["order"] = await submit_order(
                 client=client, settings=settings, account_id=settings.schwab_account_id,
@@ -800,7 +874,8 @@ async def recommend_action(settings: Settings, client: SchwabClient, trading_all
 
     await activity_log.log_event(
         event_type="kd_entry", symbol=symbol, status="signal",
-        detail={"entry_price": entry_price, "stop_price": stop_price, "atr14": float(atr),
+        detail={"entry_price": entry_price, "limit_price": limit_price, "order_type": "LIMIT",
+                "stop_price": stop_price, "atr14": float(atr),
                 "entry_date": str(latest_date), "candidates": candidates["symbol"].tolist(), "shares": shares,
                 "stop_order_id": None, "dry_run": is_dry_run},
     )

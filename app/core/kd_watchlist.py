@@ -106,15 +106,25 @@ MIN_CLOSE_PRICE = 5.0
 # 500, not the golden cross picking winners. monitor.py's blanket
 # SCHWAB_STOP_LOSS_PCT (10% default) still caps this stop on volatile names;
 # backtested with that cap: +1.11%/trade, single-account outcome unchanged.
+# 2026-11-06: the 3 ATR / 20-day exits held up on the 2000-2026 history too
+# (scripts/backtest_kd_long.py): +1.13%/trade vs +0.74% for random entries
+# with the same exits, KD ahead in 21 of 27 years.
 ATR_STOP_MULT = 3.0
 
 # Trend filter: only take a golden-cross entry if the stock's own close is
-# above its 200-day SMA. TREND_FILTER_ENABLED default False (2026-11-05): in
-# the re-backtest above it made results WORSE in the two most recent
-# sub-periods under both the old and new exits (e.g. 3ATR/20d: +0.49%/-0.20%
-# per trade with it vs +1.72%/+1.23% without). Left wired up, same pattern as
-# MARKET_FILTER_ENABLED below.
-TREND_FILTER_ENABLED = False
+# above its 200-day SMA. Briefly turned off on 2026-11-05 off the 18-month
+# backtest above, back ON 2026-11-06 after the 2000-2026 run
+# (scripts/backtest_kd_long.py, 487 symbols): for this one-position,
+# ~100%-of-equity account it cuts per-trade volatility (std 7.7% vs 10.4%,
+# worst-5% trade -9.7% vs -13.1%), and the compounded account path came out
+# ahead in every decade - CAGR 2000s +0.4% vs -5.4%, 2010s +25.9% vs +10.8%,
+# 2020-26 +14.0% vs +6.4%. The 2024-11..2026 window the short backtest
+# covered is the one stretch where it lagged (-5.5% vs +6.3%), which is why
+# the short test pointed the wrong way. Judge any future change on the
+# long-history account path, not per-trade averages on a short window.
+# (Absolute numbers carry survivorship bias - today's constituents projected
+# back to 2000 - so treat them as relative, not as expected returns.)
+TREND_FILTER_ENABLED = True
 TREND_FILTER_SMA_PERIOD = 200
 
 # Market-level filter: block NEW entries (existing positions still exit

@@ -76,7 +76,12 @@ everywhere) — nothing crashes, the app just runs with monitoring/risk-controls
   once the BUY fills (the signal-day close is only the pre-market sizing estimate). v2 places a **real resting SELL STOP
   order at the broker** (`GOOD_TILL_CANCEL`), not just a value re-checked once a day — see
   `_stop_order()`.
-- **Exit**: death cross (K crosses below D while K > 80) or the stop being hit, checked once daily
+- **Take-profit** (since 2026-11-06, `TAKE_PROFIT_ATR_MULT` 1.5): sell once the latest price is at or
+  above `actual fill + 1.5 * ATR(14)` — enforced by the monitor poll and the 04:30 run (off the close),
+  not by a resting broker order, so it never competes with the resting stop for the same shares.
+  `scripts/backtest_kd_exits.py`: every +1.0..+2.0 ATR target beat the old exits per day held in all
+  three decades; trailing / breakeven stops were worse.
+- **Exit**: take-profit, death cross (K crosses below D while K > 80) or the stop being hit, checked once daily
   off the finalized close (`recommend_action`) *and* every monitor poll off today's still-forming
   bar (`check_intraday_exit`) — the intraday check exists so a death cross/stop-pierce is acted on
   within ~a minute, not up to a day later.

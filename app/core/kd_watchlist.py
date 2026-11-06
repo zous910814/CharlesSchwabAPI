@@ -191,6 +191,21 @@ BUY_ALLOCATION_PCT = 0.97
 # the account idle - a deliberate trade-off, not a free improvement.
 ENTRY_LIMIT_ATR_OFFSET = 0.5
 
+# Take-profit at actual fill + TAKE_PROFIT_ATR_MULT * ATR14 (signal-day ATR).
+# Added 2026-11-06 (scripts/backtest_kd_exits.py, 2000-2026, on the limit
+# entry above): before it, the average trade's best point was +6.8% but it
+# exited at +1.5% - half the trades sat until the 20-day time stop and gave
+# most of it back. Every target from +1.0 to +2.0 ATR beat the old exits on
+# return-per-day-held in all three decades (a plateau, not a lone spike);
+# +1.5 sits mid-plateau: per-day +0.165/0.118/0.098% vs +0.091/0.097/0.083%,
+# one-position account maxDD better in all three decades, 26y CAGR ~+15.9%
+# vs +11.7% (maxDD -41% vs -55%). Trailing stops and breakeven stops were
+# worse. Enforced by check_intraday_exit (sells at market the first poll the
+# price is at/above the target) and by recommend_action off the finalized
+# bar's high - not a resting broker order, so there is never a second SELL
+# competing with the resting stop for the same shares.
+TAKE_PROFIT_ATR_MULT = 1.5
+
 PREDICT_FEATURE_COLUMNS = [
     "k", "d", "k_minus_d", "k_minus_d_change", "k_slope_3d", "days_in_oversold",
     "volume_ratio", "daily_range_pct", "overnight_gap",
@@ -518,14 +533,29 @@ async def check_intraday_exit(
 
     stop_price = position.get("stop_price")
     stop_hit = stop_price is not None and today_bar["low"] <= stop_price
-    if not (is_death_cross or stop_hit):
+    # Take-profit off the LATEST price, not the day's high: a spike that
+    # touched the target and already fell back shouldn't trigger a market
+    # sell well below it.
+    target = _take_profit_price(position)
+    take_profit = target is not None and today_bar["close"] >= target
+    if not (is_death_cross or stop_hit or take_profit):
         return None
 
-    reason = "stop_hit" if stop_hit else "death_cross"
+    reason = "stop_hit" if stop_hit else "take_profit" if take_profit else "death_cross"
     trade_date = datetime.now(MARKET_TZ).date().isoformat()
     result = await _exit_kd_position(settings, client, account, position, reason, trade_date, trading_allowed)
     result["intraday"] = True
     return result
+
+
+def _take_profit_price(position: dict) -> Optional[float]:
+    """fill + TAKE_PROFIT_ATR_MULT * ATR14 - only once the real fill price is
+    known (ensure_stop_order records it when it places the stop), so a target
+    is never computed off the signal-close estimate."""
+    fill, atr = position.get("fill_price"), position.get("atr14")
+    if fill is None or not atr:
+        return None
+    return float(fill) + TAKE_PROFIT_ATR_MULT * float(atr)
 
 
 async def _current_kd_position() -> Optional[dict]:
@@ -551,6 +581,7 @@ async def _current_kd_position() -> Optional[dict]:
     stop_order_id = detail.get("stop_order_id")
     entry_price = detail.get("entry_price")
     stop_price = detail.get("stop_price")
+    fill_price = None  # the broker's actual average fill, known once ensure_stop_order saw the position
     if stop_order_id is None:
         stop_events = await activity_log.fetch_events(
             event_type="kd_stop_placed", symbol=symbol, status="placed", limit=1
@@ -565,11 +596,12 @@ async def _current_kd_position() -> Optional[dict]:
             if stop_detail.get("stop_price") is not None:
                 stop_price = stop_detail["stop_price"]
             if stop_detail.get("fill_price") is not None:
-                entry_price = stop_detail["fill_price"]
+                fill_price = entry_price = stop_detail["fill_price"]
 
     return {
         "symbol": symbol,
         "entry_price": entry_price,
+        "fill_price": fill_price,
         "stop_price": stop_price,
         "atr14": detail.get("atr14"),
         "limit_price": detail.get("limit_price"),  # None on MARKET-entry rows logged before 2026-11-06
@@ -767,10 +799,16 @@ async def _decide(settings: Settings, client: SchwabClient, trading_allowed: Tra
             row = row.iloc[0]
             stop_price = position.get("stop_price")
             stop_hit = stop_price is not None and row["low"] <= stop_price
+            # Backstop for the intraday check (e.g. the monitor was down when
+            # the price got there). Uses the CLOSE, same "latest price, not a
+            # spike" rule as check_intraday_exit, so the two never disagree.
+            target = _take_profit_price(position)
+            take_profit = target is not None and row["close"] >= target
             days_held = _trading_days_held(all_dates, position.get("entry_date"), latest_date)
             time_stop = days_held is not None and days_held >= TIME_STOP_TRADING_DAYS
-            if bool(row["death_cross"]) or stop_hit or time_stop:
-                reason = "stop_hit" if stop_hit else "death_cross" if bool(row["death_cross"]) else "time_stop"
+            if bool(row["death_cross"]) or stop_hit or take_profit or time_stop:
+                reason = ("stop_hit" if stop_hit else "take_profit" if take_profit
+                          else "death_cross" if bool(row["death_cross"]) else "time_stop")
                 return await _exit_kd_position(
                     settings, client, account, position, reason, str(latest_date), trading_allowed
                 )

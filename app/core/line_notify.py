@@ -49,6 +49,10 @@ _suppressed_counts: dict[tuple, int] = {}
 _ALWAYS_RISKY_EVENT_TYPES = {
     "stop_loss_triggered", "circuit_breaker", "monitor_error", "daily_trading_halted",
     "kd_stop_placed", "kd_exit_deferred_pdt", "kd_blocked",
+    # A KD position sold by the ~60s monitor poll (stop_hit / take_profit /
+    # death_cross off today's bar). Exits decided at 04:30 already go out in
+    # the morning KD message, but these happen mid-session with no other push.
+    "kd_intraday_exit",
 }
 
 

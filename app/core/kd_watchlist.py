@@ -68,6 +68,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime
+from datetime import time as dt_time
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -189,7 +190,25 @@ BUY_ALLOCATION_PCT = 0.97
 # +1.13/+1.46/+1.09%), but the one-position account came out mixed (26y
 # CAGR ~+11.7% vs +13.4%, maxDD -55% vs -60%) because missed signals leave
 # the account idle - a deliberate trade-off, not a free improvement.
+# SUPERSEDED 2026-11-11 by the buy-at-close entry below (kept for the
+# kd_entry_unfilled handling of limit entries already in the log).
 ENTRY_LIMIT_ATR_OFFSET = 0.5
+
+# Entry since 2026-11-11: BUY AT THE CLOSE of the session after the signal.
+# The 04:30 ET run only picks the symbol and logs kd_entry_pending; the
+# monitor poll inside [CLOSE_ENTRY_START, CLOSE_ENTRY_END) ET sends a MARKET
+# BUY sized off the live price (fills ~= the close). The user found the
+# limit entry missed too much (PLTR 11/09, COP 11/11 both unfilled) and asked
+# to decide after the open; scripts/backtest_kd_entry_timing.py (2000-2026,
+# live exits) showed "wait for confirmation" rules (green day, close above
+# the signal close) were the WORST - they pay ~1.3-1.4% more for the same
+# mean-reversion trade - while an unconditional buy at the close fills 100%
+# and gave the best 26y one-position account of everything tested (CAGR
+# ~+18.1%, maxDD -44% vs the limit's +15.9% / -41%), though per day held it
+# trails the limit in all three decades and lagged it in 2020-26 (+12.3% vs
+# +25.8%). User chose it 2026-11-11 knowing that.
+CLOSE_ENTRY_START = dt_time(15, 55)
+CLOSE_ENTRY_END = dt_time(15, 59, 30)
 
 # Take-profit at actual fill + TAKE_PROFIT_ATR_MULT * ATR14 (signal-day ATR).
 # Added 2026-11-06 (scripts/backtest_kd_exits.py, 2000-2026, on the limit
@@ -868,53 +887,105 @@ async def _decide(settings: Settings, client: SchwabClient, trading_allowed: Tra
     if pd.isna(atr) or atr <= 0:
         return {"action": "NONE", "trade_date": str(latest_date), "reason": "no_atr_yet"}
 
-    # entry_price is the SIGNAL day's close; the order is a DAY LIMIT at
-    # ENTRY_LIMIT_ATR_OFFSET ATR below it (see that constant). A limit fill is
-    # at or below limit_price, so sizing off limit_price can't overspend.
-    # stop_price here is only the pre-fill estimate - ensure_stop_order
-    # re-anchors it to the actual average fill price.
+    # No order here any more (see CLOSE_ENTRY_START): just record what to buy
+    # at today's close. execute_pending_close_entry (monitor poll near the
+    # close) sizes it off the live price and sends the MARKET BUY. Logged to
+    # activity_log, not memory, so an auto-deploy restart mid-day keeps it.
     entry_price = float(chosen["close"])
-    limit_price = round(entry_price - ENTRY_LIMIT_ATR_OFFSET * float(atr), 2)
-    if limit_price <= 0:
-        return {"action": "NONE", "trade_date": str(latest_date), "reason": "limit_price_nonpositive"}
-    stop_price = limit_price - ATR_STOP_MULT * float(atr)
     symbol = str(chosen["symbol"])
+    session_date = datetime.now(MARKET_TZ).date().isoformat()
+    est_shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / entry_price) if buying_power else 0
+    if est_shares < 1:
+        return {"action": "NONE", "trade_date": str(latest_date), "reason": "insufficient_buying_power",
+                "symbol": symbol}
+    detail = {"entry_price": entry_price, "atr14": float(atr), "entry_date": str(latest_date),
+              "session_date": session_date, "candidates": candidates["symbol"].tolist(),
+              "est_shares": est_shares}
+    await activity_log.log_event(event_type="kd_entry_pending", symbol=symbol, status="pending", detail=detail)
+    return {"action": "BUY_AT_CLOSE", "symbol": symbol, "buying_power": buying_power,
+            "trade_date": str(latest_date), **detail}
 
-    shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / limit_price) if buying_power else 0
 
-    result = {
-        "action": "BUY", "symbol": symbol, "entry_price": entry_price, "limit_price": limit_price,
-        "stop_price": stop_price, "atr14": float(atr), "shares": shares, "buying_power": buying_power,
-        "candidates": candidates["symbol"].tolist(), "trade_date": str(latest_date),
-    }
+async def _skip_pending(pending: dict, reason: str, **extra) -> dict:
+    """Marks today's pending close-entry as handled without buying, so later
+    polls in the window don't retry it."""
+    detail = {"entry_date": (pending.get("detail") or {}).get("entry_date"), "reason": reason, **extra}
+    await activity_log.log_event(event_type="kd_entry_skipped", symbol=pending["symbol"], status=reason, detail=detail)
+    return {"action": "SKIP", "symbol": pending["symbol"], **detail}
+
+
+async def execute_pending_close_entry(
+    settings: Settings, client: SchwabClient, trading_allowed: TradingGate, now: Optional[datetime] = None,
+) -> Optional[dict]:
+    """Called every monitor poll. Inside [CLOSE_ENTRY_START, CLOSE_ENTRY_END)
+    ET, buys today's kd_entry_pending (if any, and not already handled) with a
+    MARKET order sized off the live price, then logs kd_entry exactly as the
+    old entries did - so ensure_stop_order / the take-profit / the exits all
+    work unchanged. Returns None when there's nothing to do this poll."""
+    now = now or datetime.now(MARKET_TZ)
+    if not (CLOSE_ENTRY_START <= now.time() < CLOSE_ENTRY_END):
+        return None
+    pend = await activity_log.fetch_events(event_type="kd_entry_pending", limit=1)
+    if not pend:
+        return None
+    pending = pend[0]
+    pdet = pending.get("detail") or {}
+    if pdet.get("session_date") != now.date().isoformat():
+        return None
+    for handled in ("kd_entry", "kd_entry_skipped"):
+        rows = await activity_log.fetch_events(event_type=handled, limit=1)
+        if rows and rows[0]["id"] > pending["id"]:
+            return None  # already bought (or deliberately skipped) this one
+
+    symbol = pending["symbol"]
+    blocked = await _blocked_by_gate(trading_allowed, "entry", symbol, pdet.get("entry_date"), {"at": "close_entry"})
+    if blocked is not None:
+        return await _skip_pending(pending, blocked)
+
+    account = await client.get_account(settings.schwab_account_id)
+    position = await _current_kd_position()
+    held = {p["symbol"] for p in parse_positions(account)}
+    if position is not None and position["symbol"] in held:
+        return await _skip_pending(pending, "already_holding", holding=position["symbol"])
+
+    # Live price from today's 1-minute bars - also proves there IS a session
+    # today (the monitor has no holiday calendar; on a market holiday there
+    # are no bars for today and a DAY market order would just queue for the
+    # next open instead of filling at a close).
+    history = await client.get_price_history(symbol, periodType="day", period=1, frequencyType="minute",
+                                             frequency=1, needExtendedHoursData=False)
+    today = now.date()
+    candles = [c for c in (history.get("candles") or [])
+               if datetime.fromtimestamp(c["datetime"] / 1000, MARKET_TZ).date() == today]
+    if not candles:
+        return await _skip_pending(pending, "no_session_today")
+    price = float(candles[-1]["close"])
+
+    buying_power = extract_buying_power(account)
+    shares = math.floor((buying_power * BUY_ALLOCATION_PCT) / price) if buying_power else 0
+    if shares < 1:
+        return await _skip_pending(pending, "insufficient_buying_power", price=price, buying_power=buying_power)
+
+    atr = float(pdet["atr14"])
+    result = {"action": "BUY", "symbol": symbol, "price_at_order": price, "shares": shares,
+              "entry_price": pdet.get("entry_price"), "atr14": atr}
     is_dry_run = False
-    if shares >= 1:
-        order_body = _limit_order(symbol, "BUY", shares, limit_price)
-        try:
-            result["order"] = await submit_order(
-                client=client, settings=settings, account_id=settings.schwab_account_id,
-                order_body=order_body, source="kd_watchlist",
-            )
-            is_dry_run = bool(result["order"].get("dry_run"))
-        except Exception as exc:  # noqa: BLE001
-            result["order_error"] = str(exc)
+    try:
+        result["order"] = await submit_order(
+            client=client, settings=settings, account_id=settings.schwab_account_id,
+            order_body=_market_order(symbol, "BUY", shares), source="kd_watchlist",
+        )
+        is_dry_run = bool(result["order"].get("dry_run"))
+    except Exception as exc:  # noqa: BLE001
+        result["order_error"] = str(exc)
 
-        # The stop is NOT placed here anymore - see ensure_stop_order's
-        # docstring. This runs pre-market (PRICE_HISTORY_RUN_TIME_ET,
-        # default 04:30 ET), so a NORMAL-session MARKET BUY submitted above
-        # won't fill for hours; a SELL STOP placed immediately after it used
-        # to get rejected outright since the account didn't hold the shares
-        # yet. monitor.py's poll loop calls ensure_stop_order every ~60s
-        # during market hours and places the stop the moment the account
-        # actually shows the fill.
-    else:
-        result["reason"] = "insufficient_buying_power"
-
+    # stop_price is the pre-fill estimate; ensure_stop_order (next poll, or
+    # the first poll of the next session) re-anchors it to the real fill.
     await activity_log.log_event(
         event_type="kd_entry", symbol=symbol, status="signal",
-        detail={"entry_price": entry_price, "limit_price": limit_price, "order_type": "LIMIT",
-                "stop_price": stop_price, "atr14": float(atr),
-                "entry_date": str(latest_date), "candidates": candidates["symbol"].tolist(), "shares": shares,
-                "stop_order_id": None, "dry_run": is_dry_run},
+        detail={"entry_price": pdet.get("entry_price"), "order_type": "MARKET_AT_CLOSE", "price_at_order": price,
+                "stop_price": price - ATR_STOP_MULT * atr, "atr14": atr, "entry_date": pdet.get("entry_date"),
+                "candidates": pdet.get("candidates"), "shares": shares, "stop_order_id": None,
+                "dry_run": is_dry_run, "order_error": result.get("order_error")},
     )
     return result

@@ -10,6 +10,7 @@ from app.core import activity_log, kd_watchlist, price_history_db
 from app.core.account import extract_day_pl, extract_equity, parse_positions
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
+from app.core.line_notify import format_close_entry_message, send_line_message
 from app.core.order_executor import submit_order
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -223,6 +224,19 @@ async def _poll_once(settings: Settings) -> None:
                 await activity_log.log_event(
                     event_type="monitor_error", status="error",
                     detail={"phase": "kd_intraday_exit"}, error=str(exc),
+                )
+
+            # The KD entry itself (since 2026-11-11): buys this morning's
+            # pending pick with a market order in the last minutes before the
+            # close - see kd_watchlist.CLOSE_ENTRY_START.
+            try:
+                entry = await kd_watchlist.execute_pending_close_entry(settings, client, trading_allowed, now=now)
+                if entry is not None:
+                    await send_line_message(settings, format_close_entry_message(entry))
+            except Exception as exc:  # noqa: BLE001
+                await activity_log.log_event(
+                    event_type="monitor_error", status="error",
+                    detail={"phase": "kd_close_entry"}, error=str(exc),
                 )
     finally:
         await client.aclose()

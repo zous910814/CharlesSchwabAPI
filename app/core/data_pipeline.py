@@ -9,7 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from app.clients.schwab import SchwabClient
-from app.core import activity_log, fundamentals_db, kd_watchlist, monitor, price_history_db
+from app.core import activity_log, fundamentals_db, kd_watchlist, monitor, price_history_db, token_reminder
 from app.core.config import Settings, get_settings
 from app.core.deps import get_schwab_client
 from app.core.line_notify import (
@@ -198,6 +198,12 @@ async def run_daily_forever() -> None:
         # restart - otherwise this loop keeps the refresh_token that was live
         # when it started sleeping, potentially many hours stale.
         settings = get_settings()
+        # Before the weekend skip on purpose: a token expiring over a weekend
+        # still needs its reminder (see app/core/token_reminder.py).
+        try:
+            await token_reminder.remind_if_needed(settings)
+        except Exception:  # noqa: BLE001 - a reminder must never stop the daily run
+            logger.exception("token reminder failed")
         now = datetime.now(MARKET_TZ)
         if now.weekday() >= 5:
             # No trading Sat/Sun, so the most recent daily bar (and thus any

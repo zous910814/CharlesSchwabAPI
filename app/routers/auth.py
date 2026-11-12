@@ -1,5 +1,6 @@
 ﻿import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -33,7 +34,10 @@ async def oauth_callback(
         saved = False
         save_error = None
         try:
-            payload = {"code": code, "state": state, "tokens": tokens}
+            # logged_in_at drives app/core/token_reminder.py's "re-login before
+            # the ~7-day refresh token expires" LINE reminder.
+            payload = {"code": code, "state": state, "tokens": tokens,
+                       "logged_in_at": datetime.now(timezone.utc).isoformat()}
             Path(".schwab_tokens.json").write_text(json.dumps(payload, indent=2))
             saved = True
         except Exception as write_exc:  # pragma: no cover - best-effort persistence

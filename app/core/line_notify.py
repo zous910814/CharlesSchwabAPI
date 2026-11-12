@@ -164,7 +164,14 @@ def format_kd_recommendation_message(result: dict) -> str:
         lines.append(f"Previous limit BUY {prev['symbol']}{limit_s} did not fill - expired at the close, skipped")
 
     action = result.get("action")
-    if action == "BUY":
+    if action == "BUY_AT_CLOSE":
+        lines.append(f"今日待買：{result['symbol']}（訊號日收盤 {result['entry_price']:.2f}）")
+        lines.append("將在今天收盤前（美東 15:55，台灣隔天 04:55，夏令時間 03:55）以市價買進，股數依當下價格計算")
+        lines.append(f"停損：成交價 − {result['atr14'] * 3:.2f}（3×ATR）｜停利：成交價 + {result['atr14'] * 1.5:.2f}（1.5×ATR）")
+        others = [c for c in result.get("candidates", []) if c != result["symbol"]]
+        if others:
+            lines.append(f"今天其他黃金交叉（未選）：{', '.join(others)}")
+    elif action == "BUY":
         limit = result.get("limit_price")
         ref = limit if limit is not None else result["entry_price"]
         stop_distance = ref - result["stop_price"]
@@ -203,6 +210,8 @@ def format_kd_recommendation_message(result: dict) -> str:
         if result.get("blocked_candidates"):
             lines.append(f"Golden cross today ({', '.join(result['blocked_candidates'])}) - "
                           f"entry blocked by {reason}")
+        elif reason == "insufficient_buying_power":
+            lines.append(f"有黃金交叉（{result.get('symbol')}），但資金不足以買 1 股，今天不買")
         elif reason == "entry_already_submitted":
             lines.append(f"Entry for {result.get('symbol')} on this signal date was already submitted - not re-sending")
         else:
@@ -210,6 +219,35 @@ def format_kd_recommendation_message(result: dict) -> str:
     elif result.get("skipped"):
         lines.append(f"Skipped: {result['skipped']}")
 
+    return "\n".join(lines)
+
+
+_SKIP_REASONS_ZH = {
+    "manual_pause": "已手動暫停交易",
+    "circuit_breaker": "今日虧損熔斷中",
+    "already_holding": "目前已有持股",
+    "no_session_today": "今天美股休市",
+    "insufficient_buying_power": "資金不足以買 1 股",
+}
+
+
+def format_close_entry_message(result: dict) -> str:
+    """kd_watchlist.execute_pending_close_entry's return - pushed the moment
+    the near-close buy goes out (or is skipped). In Chinese per the user."""
+    now = datetime.now(LA_TZ).strftime("%Y-%m-%d %H:%M PT")
+    lines = [f"[KD 收盤買進] {now}"]
+    if result.get("action") == "SKIP":
+        reason = result.get("reason")
+        lines.append(f"今天不買 {result['symbol']}：{_SKIP_REASONS_ZH.get(reason, reason)}")
+        return "\n".join(lines)
+    order = result.get("order")
+    if result.get("order_error"):
+        lines.append(f"買進 {result['symbol']} 失敗：{result['order_error'][:200]}")
+        return "\n".join(lines)
+    mode = "（模擬單，未實際成交）" if order and order.get("dry_run") else ""
+    lines.append(f"已送出市價買單{mode}：{result['shares']} 股 {result['symbol']}，下單時價格約 {result['price_at_order']:.2f}")
+    lines.append(f"成交後會自動掛停損（成交價 − {result['atr14'] * 3:.2f}），"
+                 f"停利點為成交價 + {result['atr14'] * 1.5:.2f}")
     return "\n".join(lines)
 
 

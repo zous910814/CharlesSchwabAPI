@@ -59,12 +59,19 @@ everywhere) — nothing crashes, the app just runs with monitoring/risk-controls
   the prior day's state) picks the one most likely to have crossed — a tie-break only, not a
   timing signal (see the module's long docstring for the reasoning and `scripts/backtest_kd_predict.py`
   for the offline validation, ~0.97 AUC).
-- **Entry order** (since 2026-11-06): DAY **LIMIT** BUY at `signal-day close - ENTRY_LIMIT_ATR_OFFSET
-  (0.5) * ATR(14)`, sized `BUY_ALLOCATION_PCT` (0.97) of buying power / limit price. Fills only ~37%
-  of signals (`scripts/backtest_kd_entry_price.py`) — an unfilled one expires at the close, the next
-  run logs `kd_entry_unfilled` and treats the account as flat. `recommend_action` refuses to send a
-  second BUY for a signal date it already acted on (`entry_already_submitted`), since an unfilled
-  limit leaves the symbol un-held where the old MARKET entry always filled.
+- **Entry order** (since 2026-11-11): **buy at the close** of the session after the signal. The
+  04:30 run only picks the symbol and logs `kd_entry_pending` (no order); the monitor poll in
+  `[CLOSE_ENTRY_START 15:55, CLOSE_ENTRY_END 15:59:30)` ET calls `execute_pending_close_entry`, which
+  sends a MARKET BUY sized `BUY_ALLOCATION_PCT` (0.97) of buying power / the live price, logs
+  `kd_entry` as before, and pushes a Chinese LINE message. Skips (pause/breaker, already holding,
+  no bars today = market holiday, no cash) are logged once as `kd_entry_skipped`. Chosen over the
+  2026-11-06 DAY limit at close - 0.5 ATR (filled only ~37%; `kd_entry_unfilled` handling remains for
+  those legacy rows) via `scripts/backtest_kd_entry_timing.py`: "wait for confirmation" entries
+  were the worst; buy-at-close fills 100% with the best 26y one-position account.
+- **Login reminder**: `app/core/token_reminder.py`, run daily (incl. weekends) from
+  `data_pipeline.run_daily_forever`, LINE-pushes a Chinese reminder when the Schwab refresh token
+  (~7 days from the `logged_in_at` that `auth.py` now writes to `.schwab_tokens.json`) has ≤2 days
+  left or has expired.
 - **Filters/exits** (retuned 2026-11-05/06, see the comments on `ATR_STOP_MULT` and
   `TREND_FILTER_ENABLED`): 3 ATR stop, 20-trading-day time stop, SMA200 trend filter **on**.
   Validated on 2000-2026 daily bars (`scripts/backtest_kd_long.py`, data in the gitignored

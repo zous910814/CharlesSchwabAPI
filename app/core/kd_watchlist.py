@@ -530,14 +530,10 @@ async def check_intraday_exit(
         return None
 
     try:
-        history = await client.get_price_history(
-            symbol, periodType="day", period=1, frequencyType="minute", frequency=1,
-            needExtendedHoursData=False,
-        )
+        candles = await _todays_minute_candles(client, symbol)
     except Exception as exc:  # noqa: BLE001
         logger.warning("kd_watchlist intraday check: price history fetch failed for %s: %s", symbol, exc)
         return None
-    candles = history.get("candles") or []
     if not candles:
         return None
 
@@ -565,6 +561,25 @@ async def check_intraday_exit(
     result = await _exit_kd_position(settings, client, account, position, reason, trade_date, trading_allowed)
     result["intraday"] = True
     return result
+
+
+async def _todays_minute_candles(client: SchwabClient, symbol: str, now: Optional[datetime] = None) -> list[dict]:
+    """TODAY's regular-session 1-minute candles so far (empty on a market
+    holiday). startDate/endDate MUST be explicit: with only periodType=day/
+    period=1, Schwab's endDate defaults to the PREVIOUS business day's close,
+    so the call silently returned yesterday's bars. That made the near-close
+    entry skip real sessions as "no_session_today" (EXPE 2026-11-12, IFF
+    2026-11-16) and fed yesterday's bars to check_intraday_exit's take-profit
+    / death-cross test. The date filter is a second guard against the same."""
+    now = now or datetime.now(MARKET_TZ)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    history = await client.get_price_history(
+        symbol, periodType="day", frequencyType="minute", frequency=1, needExtendedHoursData=False,
+        startDate=int(start.timestamp() * 1000), endDate=int(now.timestamp() * 1000),
+    )
+    today = now.date()
+    return [c for c in (history.get("candles") or [])
+            if datetime.fromtimestamp(c["datetime"] / 1000, MARKET_TZ).date() == today]
 
 
 def _take_profit_price(position: dict) -> Optional[float]:
@@ -952,11 +967,7 @@ async def execute_pending_close_entry(
     # today (the monitor has no holiday calendar; on a market holiday there
     # are no bars for today and a DAY market order would just queue for the
     # next open instead of filling at a close).
-    history = await client.get_price_history(symbol, periodType="day", period=1, frequencyType="minute",
-                                             frequency=1, needExtendedHoursData=False)
-    today = now.date()
-    candles = [c for c in (history.get("candles") or [])
-               if datetime.fromtimestamp(c["datetime"] / 1000, MARKET_TZ).date() == today]
+    candles = await _todays_minute_candles(client, symbol, now)
     if not candles:
         return await _skip_pending(pending, "no_session_today")
     price = float(candles[-1]["close"])
